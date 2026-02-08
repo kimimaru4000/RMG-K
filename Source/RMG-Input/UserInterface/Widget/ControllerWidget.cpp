@@ -457,6 +457,12 @@ void ControllerWidget::setPluggedIn(bool value)
         widget->setEnabled(value);
     }
 
+    // when plugging in, respect Real N64 Range checkbox state
+    if (value && this->realN64RangeCheckBox->isChecked())
+    {
+        this->analogStickRangeSlider->setEnabled(false);
+    }
+
     this->ClearControllerImage();
 }
 
