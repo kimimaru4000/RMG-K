@@ -345,6 +345,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
         this->netplaySessionDialog->close();
     }
 
+    // Close any open Kaillera dialogs (server browser, netplay)
+    // These run in QEventLoops so they must be explicitly closed
+    for (QDialog* dlg : this->findChildren<QDialog*>())
+    {
+        dlg->close();
+    }
+
     // Shutdown Kaillera if active
     if (this->kailleraSessionManager != nullptr)
     {
@@ -2836,14 +2843,18 @@ QString MainWindow::findRomByName(QString gameName)
     }
 
     // Try substring match (if one contains the other)
-    for (auto it = romData.begin(); it != romData.end(); ++it)
+    if (!normalizedSearch.isEmpty())
     {
-        QString localName = QString::fromStdString(it.value().GoodName);
-        QString normalizedLocal = normalizeGameName(localName);
-
-        if (normalizedLocal.contains(normalizedSearch) || normalizedSearch.contains(normalizedLocal))
+        for (auto it = romData.begin(); it != romData.end(); ++it)
         {
-            return it.key();
+            QString localName = QString::fromStdString(it.value().GoodName);
+            QString normalizedLocal = normalizeGameName(localName);
+
+            if (!normalizedLocal.isEmpty() &&
+                (normalizedLocal.contains(normalizedSearch) || normalizedSearch.contains(normalizedLocal)))
+            {
+                return it.key();
+            }
         }
     }
 
