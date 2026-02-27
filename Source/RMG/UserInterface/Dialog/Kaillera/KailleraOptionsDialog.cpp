@@ -17,11 +17,13 @@
 #include <QHBoxLayout>
 #include <QFormLayout>
 #include <QDialogButtonBox>
+#include <QIcon>
 #include <QLabel>
 
 KailleraOptionsDialog::KailleraOptionsDialog(QWidget* parent)
     : QDialog(parent)
 {
+    setWindowIcon(QIcon(":Resource/Kaillera.svg"));
     setWindowTitle("Kaillera Options");
     setFixedSize(280, 200);
 

@@ -70,6 +70,7 @@ KailleraServerBrowserDialog::KailleraServerBrowserDialog(const QString& serverNa
     : QDialog(parent)
     , m_serverName(serverName)
 {
+    setWindowIcon(QIcon(":Resource/Kaillera.svg"));
     setupUI();
     connectSignals();
 
@@ -575,20 +576,62 @@ void KailleraServerBrowserDialog::buildGameListMenu()
     });
     m_gameListMenu->addSeparator();
 
-    // Populate from kailleraInfos::gameList
-    // The game list is a double-null-terminated string of game names
-    if (infos.gameList)
+    populateGameSubmenus(m_gameListMenu);
+}
+
+void KailleraServerBrowserDialog::populateGameSubmenus(QMenu* parentMenu)
+{
+    if (!infos.gameList)
+        return;
+
+    // Collect all game names
+    std::vector<QString> gameNames;
+    const char* p = infos.gameList;
+    while (*p)
     {
-        const char* p = infos.gameList;
-        while (*p)
+        gameNames.push_back(QString::fromUtf8(p));
+        p += strlen(p) + 1;
+    }
+
+    // Group by first character: # for digits/symbols, A-Z for letters
+    QMap<QChar, QStringList> groups;
+    for (const auto& name : gameNames)
+    {
+        if (name.isEmpty())
+            continue;
+        QChar first = name.at(0).toUpper();
+        QChar key = first.isLetter() ? first : QChar('#');
+        groups[key].append(name);
+    }
+
+    // Add # submenu first if it exists
+    if (groups.contains(QChar('#')))
+    {
+        QMenu* sub = parentMenu->addMenu("#");
+        for (const auto& gameName : groups[QChar('#')])
         {
-            QString gameName = QString::fromUtf8(p);
-            m_gameListMenu->addAction(gameName, this, [this, gameName]() {
+            sub->addAction(gameName, this, [this, gameName]() {
                 m_currentGameName = gameName;
                 QByteArray nameBytes = gameName.toUtf8();
                 kaillera_create_game(nameBytes.data());
             });
-            p += strlen(p) + 1;
+        }
+    }
+
+    // Add A-Z submenus
+    for (char c = 'A'; c <= 'Z'; ++c)
+    {
+        QChar key(c);
+        if (!groups.contains(key))
+            continue;
+        QMenu* sub = parentMenu->addMenu(QString(key));
+        for (const auto& gameName : groups[key])
+        {
+            sub->addAction(gameName, this, [this, gameName]() {
+                m_currentGameName = gameName;
+                QByteArray nameBytes = gameName.toUtf8();
+                kaillera_create_game(nameBytes.data());
+            });
         }
     }
 }
@@ -1156,20 +1199,7 @@ void KailleraServerBrowserDialog::onGameListContextMenu(const QPoint& pos)
     });
     createSub->addSeparator();
 
-    if (infos.gameList)
-    {
-        const char* p = infos.gameList;
-        while (*p)
-        {
-            QString gameName = QString::fromUtf8(p);
-            createSub->addAction(gameName, this, [this, gameName]() {
-                m_currentGameName = gameName;
-                QByteArray nameBytes = gameName.toUtf8();
-                kaillera_create_game(nameBytes.data());
-            });
-            p += strlen(p) + 1;
-        }
-    }
+    populateGameSubmenus(createSub);
 
     // "Join" option only if a game row is selected
     if (hasSelection)

@@ -24,6 +24,7 @@
 #include <QDateTime>
 #include <QClipboard>
 #include <QApplication>
+#include <QIcon>
 
 #include <cstring>
 
@@ -129,6 +130,7 @@ KailleraP2PDialog::KailleraP2PDialog(bool isHost, const QString& gameName,
                                      const QString& joinCode, QWidget* parent)
     : QDialog(parent), m_isHost(isHost), m_gameName(gameName), m_username(username)
 {
+    setWindowIcon(QIcon(":Resource/Kaillera.svg"));
     setupUI();
     connectSignals();
 

@@ -53,6 +53,7 @@
 KailleraNetplayDialog::KailleraNetplayDialog(QWidget* parent)
     : QDialog(parent)
 {
+    setWindowIcon(QIcon(":Resource/Kaillera.svg"));
     m_netManager = new QNetworkAccessManager(this);
 
     setupUI();
@@ -713,11 +714,23 @@ void KailleraNetplayDialog::onServerRightClicked(QPoint pos)
     }
 }
 
+// QTableWidgetItem subclass that sorts numerically by Qt::UserRole data
+class NumericSortItem : public QTableWidgetItem
+{
+public:
+    using QTableWidgetItem::QTableWidgetItem;
+    bool operator<(const QTableWidgetItem& other) const override
+    {
+        return data(Qt::UserRole).toInt() < other.data(Qt::UserRole).toInt();
+    }
+};
+
 void KailleraNetplayDialog::onLiveServerList()
 {
     // Open the live server list as a separate dialog
     QDialog* liveDialog = new QDialog(this);
     liveDialog->setWindowTitle("Live Server List");
+    liveDialog->setWindowIcon(QIcon(":Resource/Kaillera.svg"));
     liveDialog->setMinimumSize(600, 400);
     liveDialog->resize(700, 500);
 
@@ -727,8 +740,8 @@ void KailleraNetplayDialog::onLiveServerList()
     liveLabel->setStyleSheet("color: blue;");
     dlgLayout->addWidget(liveLabel);
 
-    auto* liveTable = new QTableWidget(0, 6, liveDialog);
-    liveTable->setHorizontalHeaderLabels({"Name", "IP", "Users", "Games", "Version", "Location"});
+    auto* liveTable = new QTableWidget(0, 7, liveDialog);
+    liveTable->setHorizontalHeaderLabels({"Name", "IP", "Ping", "Users", "Games", "Version", "Location"});
     liveTable->horizontalHeader()->setStretchLastSection(true);
     liveTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     liveTable->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -880,20 +893,61 @@ void KailleraNetplayDialog::onLiveServerList()
             liveTable->insertRow(row);
             liveTable->setItem(row, 0, new QTableWidgetItem(name));
             liveTable->setItem(row, 1, new QTableWidgetItem(hostPort));
-            auto* usersItem = new QTableWidgetItem(users);
+            auto* pingItem = new NumericSortItem("...");
+            pingItem->setData(Qt::UserRole, -1);
+            liveTable->setItem(row, 2, pingItem);
+            auto* usersItem = new NumericSortItem(users);
             usersItem->setData(Qt::UserRole, users.toInt());
-            liveTable->setItem(row, 2, usersItem);
-            auto* gamesItem = new QTableWidgetItem(games);
+            liveTable->setItem(row, 3, usersItem);
+            auto* gamesItem = new NumericSortItem(games);
             gamesItem->setData(Qt::UserRole, games.toInt());
-            liveTable->setItem(row, 3, gamesItem);
-            liveTable->setItem(row, 4, new QTableWidgetItem(version));
-            liveTable->setItem(row, 5, new QTableWidgetItem(location));
+            liveTable->setItem(row, 4, gamesItem);
+            liveTable->setItem(row, 5, new QTableWidgetItem(version));
+            liveTable->setItem(row, 6, new QTableWidgetItem(location));
             total++;
         }
 
         liveTable->setSortingEnabled(true);
-        liveLabel->setText(QString::number(total) + " servers found");
+        liveLabel->setText(QString::number(total) + " servers found — pinging...");
         liveLabel->setStyleSheet("color: green;");
+
+        // Ping each server after loading
+        QTimer::singleShot(100, liveTable, [liveTable, liveLabel, total]() {
+            liveTable->setSortingEnabled(false);
+            for (int i = 0; i < liveTable->rowCount(); i++)
+            {
+                QString hostStr = liveTable->item(i, 1)->text();
+                QByteArray ipBytes;
+                int port = 27888;
+                int colonIdx = hostStr.lastIndexOf(':');
+                if (colonIdx >= 0)
+                {
+                    ipBytes = hostStr.left(colonIdx).toUtf8();
+                    port = hostStr.mid(colonIdx + 1).toInt();
+                    if (port == 0) port = 27888;
+                }
+                else
+                {
+                    ipBytes = hostStr.toUtf8();
+                }
+
+                int pingMs = kaillera_ping_server(ipBytes.data(), port, 2000);
+                auto* item = liveTable->item(i, 2);
+                if (pingMs >= 0)
+                {
+                    item->setText(QString::number(pingMs) + "ms");
+                    item->setData(Qt::UserRole, pingMs);
+                }
+                else
+                {
+                    item->setText("timeout");
+                    item->setData(Qt::UserRole, 99999);
+                }
+                QApplication::processEvents();
+            }
+            liveTable->setSortingEnabled(true);
+            liveLabel->setText(QString::number(total) + " servers found");
+        });
     });
 
     liveDialog->exec();

@@ -14,6 +14,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QIcon>
 
 static const char* kPlistUrl = "http://kaillerareborn.2manygames.fr:27887/plist.txt";
 
@@ -40,6 +41,7 @@ static bool extractAppCode(QString& emulator, QString& code)
 KailleraWaitingGamesDialog::KailleraWaitingGamesDialog(QWidget* parent)
     : QDialog(parent)
 {
+    setWindowIcon(QIcon(":Resource/Kaillera.svg"));
     setWindowTitle("waiting games...");
     setMinimumSize(640, 400);
     resize(700, 450);

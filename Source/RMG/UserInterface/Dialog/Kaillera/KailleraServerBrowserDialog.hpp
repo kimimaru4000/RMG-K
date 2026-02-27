@@ -93,6 +93,7 @@ private:
     void showBottomGameList();
     void showBottomGameRoom();
     void buildGameListMenu();
+    void populateGameSubmenus(QMenu* parentMenu);
     void executeOptions();
     void saveColumnWidths();
     void restoreColumnWidths();
