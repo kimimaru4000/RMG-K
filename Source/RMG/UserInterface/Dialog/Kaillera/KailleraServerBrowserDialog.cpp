@@ -33,7 +33,9 @@
 #include <QRegularExpression>
 #include <QApplication>
 #include <QColor>
+#include <QEvent>
 #include <QIcon>
+#include <QMouseEvent>
 #include <QProxyStyle>
 #include <QStyle>
 #include <windows.h>
@@ -85,6 +87,47 @@ public:
         return QProxyStyle::pixelMetric(metric, option, widget);
     }
 };
+
+class TableBlankClickClearFilter final : public QObject
+{
+public:
+    explicit TableBlankClickClearFilter(QTableWidget* table)
+        : QObject(table)
+        , m_table(table)
+    {
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (m_table == nullptr || watched != m_table->viewport() || event->type() != QEvent::MouseButtonPress)
+        {
+            return QObject::eventFilter(watched, event);
+        }
+
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        if (!m_table->indexAt(mouseEvent->pos()).isValid())
+        {
+            // Clicking empty area should clear the current row highlight.
+            m_table->clearSelection();
+            m_table->setCurrentCell(-1, -1);
+        }
+
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QTableWidget* m_table = nullptr;
+};
+
+void enableBlankAreaDeselect(QTableWidget* table)
+{
+    if (table == nullptr)
+    {
+        return;
+    }
+    table->viewport()->installEventFilter(new TableBlankClickClearFilter(table));
+}
 }
 
 // QTableWidgetItem subclass that sorts numerically instead of alphabetically
@@ -209,8 +252,14 @@ void KailleraServerBrowserDialog::setupUI()
 
     // Use a classic blue selection instead of the default purple and style modern chat composers.
     setStyleSheet(
+        "QTableWidget::item { padding-left: 6px; }"
         "QTableWidget::item:selected { background-color: #0078D7; color: white; }"
         "QWidget#KailleraPane {"
+        "  border: 1px solid palette(mid);"
+        "  border-radius: 10px;"
+        "  background-color: palette(base);"
+        "}"
+        "QWidget#KailleraPaneGameList {"
         "  border: 1px solid palette(mid);"
         "  border-radius: 10px;"
         "  background-color: palette(base);"
@@ -276,6 +325,19 @@ void KailleraServerBrowserDialog::setupUI()
         "QHeaderView::section:first {"
         "  border-left: none;"
         "}"
+        "QTableWidget#KailleraSurface[roomLobbySnapshot=\"true\"] QHeaderView::section:first {"
+        "  border-left: 1px solid palette(mid);"
+        "}"
+        "QTableWidget#KailleraSurface[mainGameList=\"true\"] {"
+        "  border-top-left-radius: 9px;"
+        "  border-top-right-radius: 9px;"
+        "}"
+        "QTableWidget#KailleraSurface[mainGameList=\"true\"] QHeaderView::section:first {"
+        "  border-top-left-radius: 9px;"
+        "}"
+        "QTableWidget#KailleraSurface[mainGameList=\"true\"] QHeaderView::section:last {"
+        "  border-top-right-radius: 9px;"
+        "}"
         "QWidget#KailleraChatComposer {"
         "  border: 1px solid palette(mid);"
         "  border-radius: 10px;"
@@ -321,6 +383,7 @@ void KailleraServerBrowserDialog::setupUI()
         "  border-radius: 8px;"
         "  min-height: 24px;"
         "  padding: 4px 12px;"
+        "  font-weight: 700;"
         "  color: white;"
         "  background-color: #0078D7;"
         "}"
@@ -412,13 +475,6 @@ void KailleraServerBrowserDialog::setupUI()
     lobbyHeaderLayout->addWidget(lobbyHeaderIcon);
     lobbyHeaderLayout->addWidget(lobbyHeaderTitle);
     lobbyHeaderLayout->addStretch();
-    m_btnCreateSwap = new QPushButton("Create", lobbyHeader);
-    m_btnCreateSwap->setObjectName("KailleraPrimaryButton");
-    m_btnCreateSwap->setToolTip("Create a game");
-    m_btnCreateSwap->setIcon(style()->standardIcon(QStyle::SP_FileDialogNewFolder));
-    m_btnCreateSwap->setMinimumWidth(86);
-    connect(m_btnCreateSwap, &QPushButton::clicked, this, &KailleraServerBrowserDialog::onCreateOrSwap);
-    lobbyHeaderLayout->addWidget(m_btnCreateSwap);
 
     auto* lobbyBody = new QWidget(lobbyPane);
     auto* lobbyBodyLayout = new QVBoxLayout(lobbyBody);
@@ -455,7 +511,21 @@ void KailleraServerBrowserDialog::setupUI()
 
     lobbyComposerLayout->addWidget(m_lobbyChatInput);
     lobbyComposerLayout->addWidget(m_btnSendLobby, 0, Qt::AlignVCenter);
-    lobbyBodyLayout->addWidget(lobbyComposer);
+
+    m_btnCreateSwap = new QPushButton("Create", lobbyBody);
+    m_btnCreateSwap->setObjectName("KailleraPrimaryButton");
+    m_btnCreateSwap->setToolTip("Create a game");
+    m_btnCreateSwap->setIcon(whiteLineIcon("add-line"));
+    m_btnCreateSwap->setIconSize(QSize(16, 16));
+    m_btnCreateSwap->setMinimumWidth(90);
+    connect(m_btnCreateSwap, &QPushButton::clicked, this, &KailleraServerBrowserDialog::onCreateOrSwap);
+
+    auto* lobbyComposerRow = new QHBoxLayout();
+    lobbyComposerRow->setContentsMargins(0, 0, 0, 0);
+    lobbyComposerRow->setSpacing(6);
+    lobbyComposerRow->addWidget(lobbyComposer, 1);
+    lobbyComposerRow->addWidget(m_btnCreateSwap);
+    lobbyBodyLayout->addLayout(lobbyComposerRow);
 
     lobbyPaneLayout->addWidget(lobbyHeader);
     lobbyPaneLayout->addWidget(lobbyBody, 1);
@@ -518,6 +588,7 @@ void KailleraServerBrowserDialog::setupUI()
     m_userTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_userTable, &QWidget::customContextMenuRequested,
             this, &KailleraServerBrowserDialog::onUserListContextMenu);
+    enableBlankAreaDeselect(m_userTable);
     usersBodyLayout->addWidget(m_userTable);
     usersPaneLayout->addWidget(usersHeader);
     usersPaneLayout->addWidget(usersBody, 1);
@@ -547,10 +618,18 @@ QWidget* KailleraServerBrowserDialog::createGameListWidget()
     auto* widget = new QWidget();
     auto* layout = new QVBoxLayout(widget);
     layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(8);
+    layout->setSpacing(0);
 
-    m_gameTable = new QTableWidget(0, 6, widget);
+    auto* pane = new QWidget(widget);
+    pane->setObjectName("KailleraPaneGameList");
+    auto* paneLayout = new QVBoxLayout(pane);
+    // Keep a 1px inset so table contents don't paint over card borders.
+    paneLayout->setContentsMargins(1, 1, 1, 1);
+    paneLayout->setSpacing(0);
+
+    m_gameTable = new QTableWidget(0, 6, pane);
     m_gameTable->setObjectName("KailleraSurface");
+    m_gameTable->setProperty("mainGameList", true);
     m_gameTable->setHorizontalHeaderLabels({"Game", "GameID", "Emulator", "User", "Status", "Users"});
     m_gameTable->horizontalHeader()->setStretchLastSection(true);
     m_gameTable->verticalHeader()->setVisible(false);
@@ -578,9 +657,11 @@ QWidget* KailleraServerBrowserDialog::createGameListWidget()
     m_gameTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_gameTable, &QWidget::customContextMenuRequested,
             this, &KailleraServerBrowserDialog::onGameListContextMenu);
+    enableBlankAreaDeselect(m_gameTable);
     // Double-click a game to join it
     connect(m_gameTable, &QTableWidget::cellDoubleClicked, this, [this]() { onJoinGame(); });
-    layout->addWidget(m_gameTable);
+    paneLayout->addWidget(m_gameTable, 1);
+    layout->addWidget(pane, 1);
     m_gameTable->sortByColumn(4, Qt::AscendingOrder);
 
     return widget;
@@ -673,23 +754,48 @@ QWidget* KailleraServerBrowserDialog::createGameRoomWidget()
 
     auto* roomLobbiesPage = new QWidget(chatPane);
     auto* roomLobbiesLayout = new QVBoxLayout(roomLobbiesPage);
-    roomLobbiesLayout->setContentsMargins(1, 0, 0, 1);
+    roomLobbiesLayout->setContentsMargins(0, 0, 0, 0);
     roomLobbiesLayout->setSpacing(0);
-    m_roomLobbyTable = new QTableWidget(0, 4, roomLobbiesPage);
+    m_roomLobbyTable = new QTableWidget(0, 6, roomLobbiesPage);
     m_roomLobbyTable->setObjectName("KailleraSurface");
-    m_roomLobbyTable->setHorizontalHeaderLabels({"Game", "Host", "Status", "Users"});
-    m_roomLobbyTable->horizontalHeader()->setStretchLastSection(false);
-    m_roomLobbyTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    m_roomLobbyTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_roomLobbyTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    m_roomLobbyTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    m_roomLobbyTable->setProperty("roomLobbySnapshot", true);
+    m_roomLobbyTable->setHorizontalHeaderLabels({"Game", "GameID", "Emulator", "User", "Status", "Users"});
+    m_roomLobbyTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
+    m_roomLobbyTable->horizontalHeader()->setStretchLastSection(true);
     m_roomLobbyTable->verticalHeader()->setVisible(false);
     m_roomLobbyTable->setShowGrid(false);
     m_roomLobbyTable->setAlternatingRowColors(true);
     m_roomLobbyTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_roomLobbyTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_roomLobbyTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_roomLobbyTable->setSortingEnabled(false);
+    m_roomLobbyTable->setSortingEnabled(true);
+    m_roomLobbyTable->horizontalHeader()->setMinimumSectionSize(16);
+    m_roomLobbyTable->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_roomLobbyTable->horizontalHeader(), &QWidget::customContextMenuRequested,
+            this, [this](const QPoint& pos) {
+        QMenu menu(this);
+        for (int i = 0; i < m_roomLobbyTable->columnCount(); ++i) {
+            QAction* act = menu.addAction(m_roomLobbyTable->horizontalHeaderItem(i)->text());
+            act->setCheckable(true);
+            act->setChecked(!m_roomLobbyTable->isColumnHidden(i));
+            connect(act, &QAction::toggled, this, [this, i](bool visible) {
+                m_roomLobbyTable->setColumnHidden(i, !visible);
+                if (m_gameTable != nullptr && i < m_gameTable->columnCount())
+                {
+                    m_gameTable->setColumnHidden(i, !visible);
+                }
+            });
+        }
+        menu.exec(m_roomLobbyTable->horizontalHeader()->mapToGlobal(pos));
+    });
+    connect(m_roomLobbyTable->horizontalHeader(), &QHeaderView::sectionResized,
+            this, [this](int logicalIndex, int, int newSize) {
+        if (m_gameTable != nullptr && logicalIndex >= 0 && logicalIndex < m_gameTable->columnCount())
+        {
+            m_gameTable->setColumnWidth(logicalIndex, newSize);
+        }
+    });
+    enableBlankAreaDeselect(m_roomLobbyTable);
     roomLobbiesLayout->addWidget(m_roomLobbyTable);
 
     m_roomChatStack->addWidget(gameChatPage);
@@ -738,7 +844,8 @@ QWidget* KailleraServerBrowserDialog::createGameRoomWidget()
     m_playerTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_playerTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_playerTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_playerTable->setSortingEnabled(true);
+    // Keep lobby player order stable (host/player slot order), not alphabetical.
+    m_playerTable->setSortingEnabled(false);
     m_playerTable->horizontalHeader()->setMinimumSectionSize(16);
     m_playerTable->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_playerTable->horizontalHeader(), &QWidget::customContextMenuRequested,
@@ -757,6 +864,7 @@ QWidget* KailleraServerBrowserDialog::createGameRoomWidget()
     m_playerTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_playerTable, &QWidget::customContextMenuRequested,
             this, &KailleraServerBrowserDialog::onPlayerListContextMenu);
+    enableBlankAreaDeselect(m_playerTable);
     playersBodyLayout->addWidget(m_playerTable);
     playersPaneLayout->addWidget(playersHeader);
     playersPaneLayout->addWidget(playersBody, 1);
@@ -1009,29 +1117,44 @@ void KailleraServerBrowserDialog::refreshRoomLobbyTable()
         return;
     }
 
+    const int previousSortColumn = m_roomLobbyTable->horizontalHeader()->sortIndicatorSection();
+    const Qt::SortOrder previousSortOrder = m_roomLobbyTable->horizontalHeader()->sortIndicatorOrder();
+
     m_roomLobbyTable->setSortingEnabled(false);
     m_roomLobbyTable->setRowCount(0);
+
+    const int targetColumns = qMin(m_roomLobbyTable->columnCount(), m_gameTable->columnCount());
     for (int row = 0; row < m_gameTable->rowCount(); ++row)
     {
-        QTableWidgetItem* gameItem = m_gameTable->item(row, 0);
-        if (gameItem == nullptr)
-        {
-            continue;
-        }
-
-        const QString gameName = gameItem->text();
-        QTableWidgetItem* statusItem = m_gameTable->item(row, 4);
-        if (statusItem == nullptr)
-            continue;
-
         const int outRow = m_roomLobbyTable->rowCount();
         m_roomLobbyTable->insertRow(outRow);
-        m_roomLobbyTable->setItem(outRow, 0, new QTableWidgetItem(gameName));
-        m_roomLobbyTable->setItem(outRow, 1, new QTableWidgetItem(m_gameTable->item(row, 3) ? m_gameTable->item(row, 3)->text() : ""));
-        m_roomLobbyTable->setItem(outRow, 2, new QTableWidgetItem(statusItem->text()));
-        m_roomLobbyTable->setItem(outRow, 3, new QTableWidgetItem(m_gameTable->item(row, 5) ? m_gameTable->item(row, 5)->text() : ""));
+        for (int col = 0; col < targetColumns; ++col)
+        {
+            QTableWidgetItem* sourceItem = m_gameTable->item(row, col);
+            m_roomLobbyTable->setItem(outRow, col, sourceItem ? sourceItem->clone()
+                                                               : new QTableWidgetItem(""));
+        }
     }
+
+    for (int col = 0; col < targetColumns; ++col)
+    {
+        m_roomLobbyTable->setColumnHidden(col, m_gameTable->isColumnHidden(col));
+        const int width = m_gameTable->columnWidth(col);
+        if (width > 0)
+        {
+            m_roomLobbyTable->setColumnWidth(col, width);
+        }
+    }
+
     m_roomLobbyTable->setSortingEnabled(true);
+    if (previousSortColumn >= 0 && previousSortColumn < targetColumns)
+    {
+        m_roomLobbyTable->sortByColumn(previousSortColumn, previousSortOrder);
+    }
+    else
+    {
+        m_roomLobbyTable->sortByColumn(4, Qt::AscendingOrder);
+    }
 }
 
 void KailleraServerBrowserDialog::executeOptions()
@@ -1574,7 +1697,6 @@ void KailleraServerBrowserDialog::onUserGameClosed()
 
 void KailleraServerBrowserDialog::onPlayerAdded(QString name, int ping, unsigned short id, char conn)
 {
-    m_playerTable->setSortingEnabled(false);
     int row = m_playerTable->rowCount();
     m_playerTable->insertRow(row);
     auto* nameItem = new QTableWidgetItem(name);
@@ -1586,13 +1708,11 @@ void KailleraServerBrowserDialog::onPlayerAdded(QString name, int ping, unsigned
     int thrp = (ping * 60 / 1000 / c) + 2;
     int delay = thrp * c - 1;
     m_playerTable->setItem(row, 2, new NumericTableWidgetItem(delay));
-    m_playerTable->setSortingEnabled(true);
     updateHeaderCounts();
 }
 
 void KailleraServerBrowserDialog::onPlayerJoined(QString name, int ping, unsigned short uid, char conn)
 {
-    m_playerTable->setSortingEnabled(false);
     int row = m_playerTable->rowCount();
     m_playerTable->insertRow(row);
     auto* nameItem = new QTableWidgetItem(name);
@@ -1603,7 +1723,6 @@ void KailleraServerBrowserDialog::onPlayerJoined(QString name, int ping, unsigne
     int thrp = (ping * 60 / 1000 / c) + 2;
     int delay = thrp * c - 1;
     m_playerTable->setItem(row, 2, new NumericTableWidgetItem(delay));
-    m_playerTable->setSortingEnabled(true);
     updateHeaderCounts();
 
     const QString color = infoMessageColor();
