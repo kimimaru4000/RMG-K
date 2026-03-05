@@ -35,6 +35,7 @@
 #include <QColor>
 #include <QEvent>
 #include <QIcon>
+#include <QListWidgetItem>
 #include <QMouseEvent>
 #include <QProxyStyle>
 #include <QStyle>
@@ -69,6 +70,23 @@ QColor blendColors(const QColor& fg, const QColor& bg, int fgWeight)
         (fg.green() * clampedWeight + bg.green() * bgWeight) / 100,
         (fg.blue() * clampedWeight + bg.blue() * bgWeight) / 100);
 }
+
+QColor playerPortColor(int portIndex)
+{
+    switch (portIndex)
+    {
+    case 0: return QColor("#D55C5C"); // P1 red
+    case 1: return QColor("#4C86E8"); // P2 blue
+    case 2: return QColor("#E0B24D"); // P3 yellow
+    case 3: return QColor("#5AAE63"); // P4 green
+    default: return QColor("#8A8F98"); // Extra players
+    }
+}
+
+constexpr int PlayerIdRole = Qt::UserRole;
+constexpr int PlayerNameRole = Qt::UserRole + 1;
+constexpr int PlayerPingRole = Qt::UserRole + 2;
+constexpr int PlayerDelayRole = Qt::UserRole + 3;
 
 class ThinSplitterStyle final : public QProxyStyle
 {
@@ -313,6 +331,31 @@ void KailleraServerBrowserDialog::setupUI()
         "QTableWidget#KailleraSurface {"
         "  gridline-color: transparent;"
         "  alternate-background-color: palette(alternate-base);"
+        "}"
+        "QListWidget#KailleraPlayerList {"
+        "  border: none;"
+        "  background: transparent;"
+        "  outline: none;"
+        "}"
+        "QListWidget#KailleraPlayerList::item {"
+        "  border: none;"
+        "  padding: 0px;"
+        "  margin: 0px 0px 6px 0px;"
+        "}"
+        "QListWidget#KailleraPlayerList::item:selected {"
+        "  background: transparent;"
+        "}"
+        "QWidget#KailleraPlayerCard {"
+        "  border: 1px solid palette(mid);"
+        "  border-radius: 8px;"
+        "  background-color: palette(base);"
+        "}"
+        "QLabel#KailleraPlayerName {"
+        "  font-weight: 600;"
+        "  font-size: 14px;"
+        "}"
+        "QLabel#KailleraPlayerStats {"
+        "  color: palette(mid);"
         "}"
         "QHeaderView::section {"
         "  background-color: palette(window);"
@@ -679,7 +722,7 @@ QWidget* KailleraServerBrowserDialog::createGameRoomWidget()
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(8);
 
-    // Main game room area: Game chat (left) + Player table (center) + Buttons (right)
+    // Main game room area: Game chat (left) + Player list (center) + Buttons (right)
     m_roomSplitter = new QSplitter(Qt::Horizontal, widget);
     m_roomSplitter->setObjectName("KailleraJoinedSplitter");
     m_roomSplitter->setHandleWidth(1);
@@ -811,7 +854,7 @@ QWidget* KailleraServerBrowserDialog::createGameRoomWidget()
 
     roomSplitter->addWidget(chatPane);
 
-    // Player table (center)
+    // Player list (center)
     auto* playersPane = new QWidget(widget);
     playersPane->setObjectName("KailleraPaneRightJoined");
     auto* playersPaneLayout = new QVBoxLayout(playersPane);
@@ -836,41 +879,18 @@ QWidget* KailleraServerBrowserDialog::createGameRoomWidget()
 
     auto* playersBody = new QWidget(playersPane);
     auto* playersBodyLayout = new QVBoxLayout(playersBody);
-    playersBodyLayout->setContentsMargins(0, 0, 1, 1);
+    playersBodyLayout->setContentsMargins(8, 8, 8, 8);
     playersBodyLayout->setSpacing(0);
 
-    m_playerTable = new QTableWidget(0, 3, playersBody);
-    m_playerTable->setObjectName("KailleraSurface");
-    m_playerTable->setHorizontalHeaderLabels({"Nick", "Ping", "Delay"});
-    m_playerTable->horizontalHeader()->setStretchLastSection(true);
-    m_playerTable->verticalHeader()->setVisible(false);
-    m_playerTable->setShowGrid(false);
-    m_playerTable->setAlternatingRowColors(true);
-    m_playerTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_playerTable->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_playerTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    // Keep lobby player order stable (host/player slot order), not alphabetical.
-    m_playerTable->setSortingEnabled(false);
-    m_playerTable->horizontalHeader()->setMinimumSectionSize(16);
-    m_playerTable->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_playerTable->horizontalHeader(), &QWidget::customContextMenuRequested,
-            this, [this](const QPoint& pos) {
-        QMenu menu(this);
-        for (int i = 0; i < m_playerTable->columnCount(); ++i) {
-            QAction* act = menu.addAction(m_playerTable->horizontalHeaderItem(i)->text());
-            act->setCheckable(true);
-            act->setChecked(!m_playerTable->isColumnHidden(i));
-            connect(act, &QAction::toggled, this, [this, i](bool visible) {
-                m_playerTable->setColumnHidden(i, !visible);
-            });
-        }
-        menu.exec(m_playerTable->horizontalHeader()->mapToGlobal(pos));
-    });
-    m_playerTable->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(m_playerTable, &QWidget::customContextMenuRequested,
+    m_playerList = new QListWidget(playersBody);
+    m_playerList->setObjectName("KailleraPlayerList");
+    m_playerList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_playerList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_playerList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_playerList->viewport()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_playerList->viewport(), &QWidget::customContextMenuRequested,
             this, &KailleraServerBrowserDialog::onPlayerListContextMenu);
-    enableBlankAreaDeselect(m_playerTable);
-    playersBodyLayout->addWidget(m_playerTable);
+    playersBodyLayout->addWidget(m_playerList);
     playersPaneLayout->addWidget(playersHeader);
     playersPaneLayout->addWidget(playersBody, 1);
     roomSplitter->addWidget(playersPane);
@@ -1036,8 +1056,8 @@ void KailleraServerBrowserDialog::switchToLobby()
     m_roomMaxPlayers = 0;
     m_statsTimer->stop();
 
-    // Clear player table
-    m_playerTable->setRowCount(0);
+    // Clear player list
+    m_playerList->clear();
     m_gameChat->clear();
     setRoomChatSwapView(false);
     updateHeaderCounts();
@@ -1060,7 +1080,7 @@ void KailleraServerBrowserDialog::switchToGameRoom()
                                 : detectCurrentRoomMaxPlayers();
 
     // Clear game room state
-    m_playerTable->setRowCount(0);
+    m_playerList->clear();
     m_gameChat->clear();
     updateHeaderCounts();
     m_lastFrameCount = kaillera_get_frames_count();
@@ -1184,22 +1204,45 @@ void KailleraServerBrowserDialog::executeOptions()
 
 void KailleraServerBrowserDialog::buildGameListMenu()
 {
+    if (m_gameListMenu == nullptr)
+    {
+        return;
+    }
+
     m_gameListMenu->clear();
+    addCreateMenuEntries(m_gameListMenu);
+}
 
-    // Add special entries (match original n02 names)
-    m_gameListMenu->addAction("*Chat (not game)", this, [this]() {
-        m_currentGameName = "*Chat (not game)";
-        QByteArray name("*Chat (not game)");
-        kaillera_create_game(name.data());
-    });
-    m_gameListMenu->addAction("*Away (leave messages)", this, [this]() {
-        m_currentGameName = "*Away (leave messages)";
-        QByteArray name("*Away (leave messages)");
-        kaillera_create_game(name.data());
-    });
-    m_gameListMenu->addSeparator();
+void KailleraServerBrowserDialog::requestCreateGame(const QString& gameName)
+{
+    if (gameName.isEmpty())
+    {
+        return;
+    }
 
-    populateGameSubmenus(m_gameListMenu);
+    m_currentGameName = gameName;
+    QByteArray nameBytes = gameName.toUtf8();
+    kaillera_create_game(nameBytes.data());
+}
+
+void KailleraServerBrowserDialog::addCreateMenuEntries(QMenu* parentMenu)
+{
+    if (parentMenu == nullptr)
+    {
+        return;
+    }
+
+    auto addCreateAction = [parentMenu](const QString& gameName) {
+        QAction* action = parentMenu->addAction(gameName);
+        action->setData(gameName);
+    };
+
+    // Add special entries (match original n02 names).
+    addCreateAction("*Chat (not game)");
+    addCreateAction("*Away (leave messages)");
+    parentMenu->addSeparator();
+
+    populateGameSubmenus(parentMenu);
 }
 
 void KailleraServerBrowserDialog::populateGameSubmenus(QMenu* parentMenu)
@@ -1233,11 +1276,8 @@ void KailleraServerBrowserDialog::populateGameSubmenus(QMenu* parentMenu)
         QMenu* sub = parentMenu->addMenu("#");
         for (const auto& gameName : groups[QChar('#')])
         {
-            sub->addAction(gameName, this, [this, gameName]() {
-                m_currentGameName = gameName;
-                QByteArray nameBytes = gameName.toUtf8();
-                kaillera_create_game(nameBytes.data());
-            });
+            QAction* action = sub->addAction(gameName);
+            action->setData(gameName);
         }
     }
 
@@ -1250,11 +1290,8 @@ void KailleraServerBrowserDialog::populateGameSubmenus(QMenu* parentMenu)
         QMenu* sub = parentMenu->addMenu(QString(key));
         for (const auto& gameName : groups[key])
         {
-            sub->addAction(gameName, this, [this, gameName]() {
-                m_currentGameName = gameName;
-                QByteArray nameBytes = gameName.toUtf8();
-                kaillera_create_game(nameBytes.data());
-            });
+            QAction* action = sub->addAction(gameName);
+            action->setData(gameName);
         }
     }
 }
@@ -1317,12 +1354,12 @@ void KailleraServerBrowserDialog::updateHeaderCounts()
         m_connectedPlayersCountLabel->setText(QString("(%1)").arg(m_userTable->rowCount()));
     }
 
-    if (m_playersInGameCountLabel == nullptr || m_playerTable == nullptr)
+    if (m_playersInGameCountLabel == nullptr || m_playerList == nullptr)
     {
         return;
     }
 
-    int currentPlayers = m_playerTable->rowCount();
+    int currentPlayers = m_playerList->count();
     int maxPlayers = detectCurrentRoomMaxPlayers();
     if (maxPlayers > 0)
     {
@@ -1331,6 +1368,95 @@ void KailleraServerBrowserDialog::updateHeaderCounts()
     else
     {
         m_playersInGameCountLabel->setText(QString("(%1/?)").arg(currentPlayers));
+    }
+}
+
+int KailleraServerBrowserDialog::findPlayerIndexById(unsigned short id) const
+{
+    if (m_playerList == nullptr)
+    {
+        return -1;
+    }
+
+    for (int row = 0; row < m_playerList->count(); ++row)
+    {
+        QListWidgetItem* item = m_playerList->item(row);
+        if (item != nullptr && item->data(PlayerIdRole).toUInt() == static_cast<unsigned int>(id))
+        {
+            return row;
+        }
+    }
+
+    return -1;
+}
+
+void KailleraServerBrowserDialog::refreshPlayerCards()
+{
+    if (m_playerList == nullptr)
+    {
+        return;
+    }
+
+    const QColor frameColor = palette().text().color();
+    const QColor msColor = blendColors(frameColor, palette().base().color(), 55);
+
+    for (int row = 0; row < m_playerList->count(); ++row)
+    {
+        QListWidgetItem* item = m_playerList->item(row);
+        if (item == nullptr)
+        {
+            continue;
+        }
+
+        const QString name = item->data(PlayerNameRole).toString();
+        const int ping = item->data(PlayerPingRole).toInt();
+        const int delay = item->data(PlayerDelayRole).toInt();
+
+        auto* card = new QWidget(m_playerList);
+        card->setObjectName("KailleraPlayerCard");
+        auto* cardLayout = new QHBoxLayout(card);
+        cardLayout->setContentsMargins(8, 6, 8, 6);
+        cardLayout->setSpacing(8);
+
+        auto* portBadge = new QLabel(QString::number(row + 1), card);
+        portBadge->setFixedSize(22, 22);
+        portBadge->setAlignment(Qt::AlignCenter);
+        const QColor portColor = playerPortColor(row);
+        portBadge->setStyleSheet(QString(
+            "QLabel { border-radius: 11px; background-color: %1; color: white; font-weight: 700; }")
+            .arg(portColor.name()));
+
+        auto* textColumn = new QVBoxLayout();
+        textColumn->setContentsMargins(0, 0, 0, 0);
+        textColumn->setSpacing(1);
+
+        auto* nameLabel = new QLabel(name, card);
+        nameLabel->setObjectName("KailleraPlayerName");
+
+        auto* statsLabel = new QLabel(card);
+        statsLabel->setObjectName("KailleraPlayerStats");
+        statsLabel->setTextFormat(Qt::RichText);
+        statsLabel->setText(QString(
+            "<span style='color:%1;'>%2 frames</span>"
+            "<span style='color:%3;'> / %4 ms</span>")
+            .arg(frameColor.name())
+            .arg(delay)
+            .arg(msColor.name())
+            .arg(ping));
+
+        textColumn->addWidget(nameLabel);
+        textColumn->addWidget(statsLabel);
+
+        cardLayout->addWidget(portBadge, 0, Qt::AlignTop);
+        cardLayout->addLayout(textColumn, 1);
+        cardLayout->addStretch();
+
+        if (QWidget* oldCard = m_playerList->itemWidget(item))
+        {
+            oldCard->deleteLater();
+        }
+        item->setSizeHint(QSize(0, 50));
+        m_playerList->setItemWidget(item, card);
     }
 }
 
@@ -1450,11 +1576,6 @@ void KailleraServerBrowserDialog::saveColumnWidths()
         gameWidths << QString::number(m_gameTable->columnWidth(i));
     CoreSettingsSetValue(SettingsID::Kaillera_GameColumnWidths, gameWidths.join(",").toStdString());
 
-    // Save player table column widths
-    QStringList playerWidths;
-    for (int i = 0; i < m_playerTable->columnCount(); ++i)
-        playerWidths << QString::number(m_playerTable->columnWidth(i));
-    CoreSettingsSetValue(SettingsID::Kaillera_PlayerColumnWidths, playerWidths.join(",").toStdString());
 }
 
 void KailleraServerBrowserDialog::restoreColumnWidths()
@@ -1472,7 +1593,6 @@ void KailleraServerBrowserDialog::restoreColumnWidths()
 
     restoreTable(m_userTable, CoreSettingsGetStringValue(SettingsID::Kaillera_UserColumnWidths));
     restoreTable(m_gameTable, CoreSettingsGetStringValue(SettingsID::Kaillera_GameColumnWidths));
-    restoreTable(m_playerTable, CoreSettingsGetStringValue(SettingsID::Kaillera_PlayerColumnWidths));
 }
 
 // ---- Lobby mode handlers ----
@@ -1586,11 +1706,13 @@ void KailleraServerBrowserDialog::onGameClosed(unsigned int id)
     }
 
     // Set all game room players back to Idle
-    for (int i = 0; i < m_playerTable->rowCount(); ++i)
+    for (int i = 0; i < m_playerList->count(); ++i)
     {
-        QTableWidgetItem* nameItem = m_playerTable->item(i, 0);
-        if (nameItem)
-            updateUserStatus(nameItem->text(), "Idle", 1);
+        QListWidgetItem* playerItem = m_playerList->item(i);
+        if (playerItem != nullptr)
+        {
+            updateUserStatus(playerItem->data(PlayerNameRole).toString(), "Idle", 1);
+        }
     }
 
     if (m_roomShowingLobbies)
@@ -1617,11 +1739,13 @@ void KailleraServerBrowserDialog::onGameStatusChanged(unsigned int id, char stat
             updateUserStatus(ownerItem->text(), gameStatus, status);
 
         // Update all players in the game room (if we're in this game)
-        for (int i = 0; i < m_playerTable->rowCount(); ++i)
+        for (int i = 0; i < m_playerList->count(); ++i)
         {
-            QTableWidgetItem* nameItem = m_playerTable->item(i, 0);
-            if (nameItem)
-                updateUserStatus(nameItem->text(), gameStatus, status);
+            QListWidgetItem* playerItem = m_playerList->item(i);
+            if (playerItem != nullptr)
+            {
+                updateUserStatus(playerItem->data(PlayerNameRole).toString(), gameStatus, status);
+            }
         }
 
         QTableWidgetItem* gameNameItem = m_gameTable->item(row, 0);
@@ -1702,32 +1826,40 @@ void KailleraServerBrowserDialog::onUserGameClosed()
 
 void KailleraServerBrowserDialog::onPlayerAdded(QString name, int ping, unsigned short id, char conn)
 {
-    int row = m_playerTable->rowCount();
-    m_playerTable->insertRow(row);
-    auto* nameItem = new QTableWidgetItem(name);
-    nameItem->setData(Qt::UserRole, static_cast<unsigned int>(id));
-    m_playerTable->setItem(row, 0, nameItem);
-    m_playerTable->setItem(row, 1, new NumericTableWidgetItem(ping));
     // Delay calculation: (ping * 60 / 1000 / conn) + 2, then thrp * conn - 1 frames
     int c = (conn > 0) ? conn : 1;
     int thrp = (ping * 60 / 1000 / c) + 2;
     int delay = thrp * c - 1;
-    m_playerTable->setItem(row, 2, new NumericTableWidgetItem(delay));
+    int row = findPlayerIndexById(id);
+    QListWidgetItem* playerItem = (row >= 0) ? m_playerList->item(row) : new QListWidgetItem();
+    playerItem->setData(PlayerIdRole, static_cast<unsigned int>(id));
+    playerItem->setData(PlayerNameRole, name);
+    playerItem->setData(PlayerPingRole, ping);
+    playerItem->setData(PlayerDelayRole, delay);
+    if (row < 0)
+    {
+        m_playerList->addItem(playerItem);
+    }
+    refreshPlayerCards();
     updateHeaderCounts();
 }
 
 void KailleraServerBrowserDialog::onPlayerJoined(QString name, int ping, unsigned short uid, char conn)
 {
-    int row = m_playerTable->rowCount();
-    m_playerTable->insertRow(row);
-    auto* nameItem = new QTableWidgetItem(name);
-    nameItem->setData(Qt::UserRole, static_cast<unsigned int>(uid));
-    m_playerTable->setItem(row, 0, nameItem);
-    m_playerTable->setItem(row, 1, new NumericTableWidgetItem(ping));
     int c = (conn > 0) ? conn : 1;
     int thrp = (ping * 60 / 1000 / c) + 2;
     int delay = thrp * c - 1;
-    m_playerTable->setItem(row, 2, new NumericTableWidgetItem(delay));
+    int row = findPlayerIndexById(uid);
+    QListWidgetItem* playerItem = (row >= 0) ? m_playerList->item(row) : new QListWidgetItem();
+    playerItem->setData(PlayerIdRole, static_cast<unsigned int>(uid));
+    playerItem->setData(PlayerNameRole, name);
+    playerItem->setData(PlayerPingRole, ping);
+    playerItem->setData(PlayerDelayRole, delay);
+    if (row < 0)
+    {
+        m_playerList->addItem(playerItem);
+    }
+    refreshPlayerCards();
     updateHeaderCounts();
 
     const QString color = infoMessageColor();
@@ -1776,10 +1908,11 @@ void KailleraServerBrowserDialog::onPlayerJoined(QString name, int ping, unsigne
 
 void KailleraServerBrowserDialog::onPlayerLeft(QString name, unsigned short id)
 {
-    int row = findRowByValue(m_playerTable, 0, id);
+    int row = findPlayerIndexById(id);
     if (row >= 0)
     {
-        m_playerTable->removeRow(row);
+        delete m_playerList->takeItem(row);
+        refreshPlayerCards();
     }
     updateHeaderCounts();
 
@@ -1831,12 +1964,12 @@ void KailleraServerBrowserDialog::onGameStarted(QString game, int player, int nu
 
     // Populate recording_player_names from current player table
     memset(recording_player_names, 0, sizeof(recording_player_names));
-    for (int i = 0; i < m_playerTable->rowCount() && i < 4; i++)
+    for (int i = 0; i < m_playerList->count() && i < 4; i++)
     {
-        QTableWidgetItem* item = m_playerTable->item(i, 0);
-        if (item)
+        QListWidgetItem* playerItem = m_playerList->item(i);
+        if (playerItem != nullptr)
         {
-            QByteArray nameBytes = item->text().toUtf8();
+            QByteArray nameBytes = playerItem->data(PlayerNameRole).toString().toUtf8();
             strncpy(recording_player_names[i], nameBytes.constData(), 31);
             recording_player_names[i][31] = '\0';
         }
@@ -1930,38 +2063,41 @@ void KailleraServerBrowserDialog::onGameListContextMenu(const QPoint& pos)
 
     // "Create" submenu with game list
     QMenu* createSub = menu.addMenu("Create");
-
-    createSub->addAction("*Chat (not game)", this, [this]() {
-        m_currentGameName = "*Chat (not game)";
-        QByteArray name("*Chat (not game)");
-        kaillera_create_game(name.data());
-    });
-    createSub->addAction("*Away (leave messages)", this, [this]() {
-        m_currentGameName = "*Away (leave messages)";
-        QByteArray name("*Away (leave messages)");
-        kaillera_create_game(name.data());
-    });
-    createSub->addSeparator();
-
-    populateGameSubmenus(createSub);
+    addCreateMenuEntries(createSub);
 
     // "Join" option only if a game row is selected
+    QAction* joinAction = nullptr;
     if (hasSelection)
     {
-        QAction* joinAction = menu.addAction("Join");
-        connect(joinAction, &QAction::triggered, this, &KailleraServerBrowserDialog::onJoinGame);
+        joinAction = menu.addAction("Join");
     }
 
-    menu.exec(m_gameTable->viewport()->mapToGlobal(pos));
+    QAction* chosen = menu.exec(m_gameTable->viewport()->mapToGlobal(pos));
+    if (chosen == nullptr)
+    {
+        return;
+    }
+
+    if (chosen == joinAction)
+    {
+        onJoinGame();
+        return;
+    }
+
+    const QString selectedGame = chosen->data().toString();
+    if (!selectedGame.isEmpty())
+    {
+        requestCreateGame(selectedGame);
+    }
 }
 
 void KailleraServerBrowserDialog::onPlayerListContextMenu(const QPoint& pos)
 {
-    int row = m_playerTable->rowAt(pos.y());
+    int row = m_playerList->indexAt(pos).row();
     if (row < 0)
         return;
 
-    m_playerTable->selectRow(row);
+    m_playerList->setCurrentRow(row);
 
     QMenu menu(this);
     QAction* kickAction = menu.addAction(
@@ -1979,7 +2115,7 @@ void KailleraServerBrowserDialog::onPlayerListContextMenu(const QPoint& pos)
         kickAction->setText("Kick Player (Cannot kick host)");
     }
 
-    QAction* chosen = menu.exec(m_playerTable->viewport()->mapToGlobal(pos));
+    QAction* chosen = menu.exec(m_playerList->viewport()->mapToGlobal(pos));
     if (chosen == kickAction && kickAction->isEnabled())
     {
         onKickPlayer();
@@ -1993,11 +2129,22 @@ void KailleraServerBrowserDialog::onCreateOrSwap()
     if (!m_inGameRoom)
     {
         // Normal mode: show game list menu to create a game
-        if (m_gameListMenu->actions().isEmpty())
+        if (m_gameListMenu == nullptr)
         {
-            buildGameListMenu();
+            m_gameListMenu = new QMenu(this);
         }
-        m_gameListMenu->popup(m_btnCreateSwap->mapToGlobal(QPoint(0, m_btnCreateSwap->height())));
+        buildGameListMenu();
+
+        QAction* chosen = m_gameListMenu->exec(
+            m_btnCreateSwap->mapToGlobal(QPoint(0, m_btnCreateSwap->height())));
+        if (chosen != nullptr)
+        {
+            const QString selectedGame = chosen->data().toString();
+            if (!selectedGame.isEmpty())
+            {
+                requestCreateGame(selectedGame);
+            }
+        }
         return;
     }
 
@@ -2109,7 +2256,7 @@ void KailleraServerBrowserDialog::onKickPlayer()
 {
     if (!m_isHost) return;
 
-    int row = m_playerTable->currentRow();
+    int row = m_playerList->currentRow();
     if (row < 0)
     {
         QMessageBox::information(this, "Kick Player", "Select a player to kick.");
@@ -2124,10 +2271,10 @@ void KailleraServerBrowserDialog::onKickPlayer()
 
     // Get player ID from the Name column's UserRole data
     unsigned short playerId = 0;
-    QTableWidgetItem* nameItem = m_playerTable->item(row, 0);
-    if (nameItem)
+    QListWidgetItem* playerItem = m_playerList->item(row);
+    if (playerItem != nullptr)
     {
-        playerId = static_cast<unsigned short>(nameItem->data(Qt::UserRole).toUInt());
+        playerId = static_cast<unsigned short>(playerItem->data(PlayerIdRole).toUInt());
     }
 
     if (playerId > 0)
@@ -2161,7 +2308,7 @@ void KailleraServerBrowserDialog::onAdvertise()
     if (!m_inGameRoom || m_currentGameName.isEmpty())
         return;
 
-    int playerCount = m_playerTable->rowCount();
+    int playerCount = m_playerList->count();
     QString ad;
 
     if (m_isHost)
@@ -2172,9 +2319,9 @@ void KailleraServerBrowserDialog::onAdvertise()
     {
         // Get host name (first player in list, row 0)
         QString hostName;
-        if (m_playerTable->rowCount() > 0 && m_playerTable->item(0, 0))
+        if (m_playerList->count() > 0 && m_playerList->item(0) != nullptr)
         {
-            hostName = m_playerTable->item(0, 0)->text();
+            hostName = m_playerList->item(0)->data(PlayerNameRole).toString();
         }
         ad = QString("<%1> | %2 - %3 player(s)").arg(hostName, m_currentGameName).arg(playerCount);
     }

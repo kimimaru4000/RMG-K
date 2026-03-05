@@ -15,6 +15,7 @@
 #include <QDialog>
 #include <QTimer>
 #include <QTableWidget>
+#include <QListWidget>
 #include <QTextBrowser>
 #include <QLineEdit>
 #include <QPushButton>
@@ -96,6 +97,8 @@ private:
     void setRoomChatSwapView(bool showLobbies);
     void refreshRoomLobbyTable();
     void buildGameListMenu();
+    void requestCreateGame(const QString& gameName);
+    void addCreateMenuEntries(QMenu* parentMenu);
     void populateGameSubmenus(QMenu* parentMenu);
     void executeOptions();
     void saveColumnWidths();
@@ -108,6 +111,8 @@ private:
     QString connString(char conn);
     QString userStatusString(char status);
     QString gameStatusString(char status);
+    void refreshPlayerCards();
+    int findPlayerIndexById(unsigned short id) const;
     int findRowByText(QTableWidget* table, int column, const QString& text);
     void updateUserStatus(const QString& username, const QString& status, int sortKey);
 
@@ -135,7 +140,7 @@ private:
     QTableWidget* m_gameTable = nullptr;
 
     // Bottom: Game room (page 1)
-    QTableWidget* m_playerTable = nullptr;
+    QListWidget* m_playerList = nullptr;
     QStackedWidget* m_roomChatStack = nullptr;
     QTableWidget* m_roomLobbyTable = nullptr;
     bool m_roomShowingLobbies = false;

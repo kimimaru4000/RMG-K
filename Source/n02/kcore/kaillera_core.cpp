@@ -774,19 +774,35 @@ inline void kaillera_ProcessGameInstruction(k_instruction * ki) {
 	n02_TRACE();
 	if (ki->type==GAMEDATA) {
 		
-		short len = ki->load_short();
+		unsigned short len = ki->load_short();
 		char * kd;
+		const size_t allocSize = static_cast<size_t>(len) + 2;
 		
 		if (KAILLERAC.kaillera_incoming_data_cache.length == 256){
 			kd = KAILLERAC.kaillera_incoming_data_cache[0];
 			KAILLERAC.kaillera_incoming_data_cache.removei(0);
-			if (*((short*)kd) != len)
-				realloc(kd, len + 2);
+			if (*((unsigned short*)kd) != len) {
+				char* resized = static_cast<char*>(realloc(kd, allocSize));
+				if (resized != nullptr) {
+					kd = resized;
+				} else {
+					char* replacement = static_cast<char*>(malloc(allocSize));
+					if (replacement == nullptr) {
+						free(kd);
+						return;
+					}
+					free(kd);
+					kd = replacement;
+				}
+			}
 		} else {
-			kd = (char*)malloc(len+2);
+			kd = static_cast<char*>(malloc(allocSize));
+			if (kd == nullptr) {
+				return;
+			}
 		}
 		
-		*((short*)kd) = len;
+		*((unsigned short*)kd) = len;
 		
 		char * kdd = kd + 2;
 		ki->load_bytes(kdd, len);
