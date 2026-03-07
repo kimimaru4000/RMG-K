@@ -138,6 +138,151 @@ private:
     QTableWidget* m_table = nullptr;
 };
 
+class FloatingCornerButtonFilter final : public QObject
+{
+public:
+    FloatingCornerButtonFilter(QWidget* container, QWidget* button, int rightMargin, int bottomMargin)
+        : QObject(container)
+        , m_container(container)
+        , m_button(button)
+        , m_rightMargin(rightMargin)
+        , m_bottomMargin(bottomMargin)
+    {
+        reposition();
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (watched == m_container && (event->type() == QEvent::Resize || event->type() == QEvent::Show))
+        {
+            reposition();
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    void reposition()
+    {
+        if (m_container == nullptr || m_button == nullptr)
+        {
+            return;
+        }
+
+        const int x = qMax(0, m_container->width() - m_button->width() - m_rightMargin);
+        const int y = qMax(0, m_container->height() - m_button->height() - m_bottomMargin);
+        m_button->move(x, y);
+        m_button->raise();
+    }
+
+    QWidget* m_container = nullptr;
+    QWidget* m_button = nullptr;
+    int m_rightMargin = 0;
+    int m_bottomMargin = 0;
+};
+
+class TrailingTableColumnWidthFilter final : public QObject
+{
+public:
+    TrailingTableColumnWidthFilter(QTableWidget* table, int trailingColumn, int minWidth, int rightInset)
+        : QObject(table)
+        , m_table(table)
+        , m_trailingColumn(trailingColumn)
+        , m_minWidth(minWidth)
+        , m_rightInset(rightInset)
+    {
+        if (m_table != nullptr)
+        {
+            if (m_table->viewport() != nullptr)
+            {
+                m_table->viewport()->installEventFilter(this);
+            }
+            if (m_table->horizontalHeader() != nullptr)
+            {
+                m_table->horizontalHeader()->installEventFilter(this);
+                connect(m_table->horizontalHeader(), &QHeaderView::sectionResized,
+                        this, [this](int logicalIndex, int, int) {
+                    if (!m_adjusting && logicalIndex != m_trailingColumn)
+                    {
+                        apply();
+                    }
+                });
+                connect(m_table->horizontalHeader(), &QHeaderView::geometriesChanged,
+                        this, [this]() {
+                    if (!m_adjusting)
+                    {
+                        apply();
+                    }
+                });
+            }
+        }
+
+        apply();
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        if (m_table == nullptr)
+        {
+            return QObject::eventFilter(watched, event);
+        }
+
+        const bool watchedTableGeometry =
+            watched == m_table->viewport() || watched == m_table->horizontalHeader();
+        if (watchedTableGeometry
+            && (event->type() == QEvent::Resize || event->type() == QEvent::Show || event->type() == QEvent::LayoutRequest))
+        {
+            apply();
+        }
+
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    void apply()
+    {
+        if (m_table == nullptr || m_table->horizontalHeader() == nullptr
+            || m_trailingColumn < 0 || m_trailingColumn >= m_table->columnCount()
+            || m_table->isColumnHidden(m_trailingColumn))
+        {
+            return;
+        }
+
+        int availableWidth = m_table->viewport()->width() - m_rightInset;
+        if (availableWidth <= 0)
+        {
+            return;
+        }
+
+        int occupiedWidth = 0;
+        for (int col = 0; col < m_table->columnCount(); ++col)
+        {
+            if (col == m_trailingColumn || m_table->isColumnHidden(col))
+            {
+                continue;
+            }
+            occupiedWidth += m_table->columnWidth(col);
+        }
+
+        const int targetWidth = qMax(m_minWidth, availableWidth - occupiedWidth);
+        if (targetWidth == m_table->columnWidth(m_trailingColumn))
+        {
+            return;
+        }
+
+        m_adjusting = true;
+        m_table->setColumnWidth(m_trailingColumn, targetWidth);
+        m_adjusting = false;
+    }
+
+    QTableWidget* m_table = nullptr;
+    int m_trailingColumn = -1;
+    int m_minWidth = 0;
+    int m_rightInset = 0;
+    bool m_adjusting = false;
+};
+
 void enableBlankAreaDeselect(QTableWidget* table)
 {
     if (table == nullptr)
@@ -145,6 +290,27 @@ void enableBlankAreaDeselect(QTableWidget* table)
         return;
     }
     table->viewport()->installEventFilter(new TableBlankClickClearFilter(table));
+}
+
+void attachFloatingCornerButton(QWidget* container, QWidget* button, int rightMargin, int bottomMargin)
+{
+    if (container == nullptr || button == nullptr)
+    {
+        return;
+    }
+
+    container->installEventFilter(
+        new FloatingCornerButtonFilter(container, button, rightMargin, bottomMargin));
+}
+
+void anchorTrailingTableColumn(QTableWidget* table, int trailingColumn, int minWidth, int rightInset)
+{
+    if (table == nullptr)
+    {
+        return;
+    }
+
+    new TrailingTableColumnWidthFilter(table, trailingColumn, minWidth, rightInset);
 }
 }
 
@@ -407,7 +573,7 @@ void KailleraServerBrowserDialog::setupUI()
         "}"
         "QWidget#KailleraChatComposer {"
         "  border: 1px solid palette(mid);"
-        "  border-radius: 8px;"
+        "  border-radius: 7px;"
         "  background-color: palette(base);"
         "}"
         "QLineEdit#KailleraChatComposerInput {"
@@ -462,6 +628,23 @@ void KailleraServerBrowserDialog::setupUI()
         "  background-color: #005a9e;"
         "  padding-top: 5px;"
         "  padding-bottom: 3px;"
+        "}"
+        "QPushButton#KailleraFabButton {"
+        "  border: 1px solid #005a9e;"
+        "  border-radius: 23px;"
+        "  min-width: 46px;"
+        "  max-width: 46px;"
+        "  min-height: 46px;"
+        "  max-height: 46px;"
+        "  padding: 0px;"
+        "  background-color: #0078D7;"
+        "}"
+        "QPushButton#KailleraFabButton:hover {"
+        "  background-color: #1c88dc;"
+        "}"
+        "QPushButton#KailleraFabButton:pressed {"
+        "  border-color: #004f8b;"
+        "  background-color: #005a9e;"
         "}"
         "QPushButton#KailleraSecondaryButton {"
         "  border: 1px solid palette(mid);"
@@ -641,22 +824,7 @@ void KailleraServerBrowserDialog::setupUI()
     lobbyComposerLayout->addWidget(m_lobbyChatInput);
     lobbyComposerLayout->addWidget(m_btnSendLobby, 0, Qt::AlignVCenter);
 
-    m_btnCreateSwap = new QPushButton("Create", lobbyBody);
-    m_btnCreateSwap->setObjectName("KailleraPrimaryButton");
-    m_btnCreateSwap->setToolTip("Create a game");
-    m_btnCreateSwap->setIcon(whiteLineIcon("add-line"));
-    m_btnCreateSwap->setIconSize(QSize(16, 16));
-    m_btnCreateSwap->setMinimumWidth(90);
-    m_btnCreateSwap->setAutoDefault(false);
-    m_btnCreateSwap->setDefault(false);
-    connect(m_btnCreateSwap, &QPushButton::clicked, this, &KailleraServerBrowserDialog::onCreateOrSwap);
-
-    auto* lobbyComposerRow = new QHBoxLayout();
-    lobbyComposerRow->setContentsMargins(0, 0, 0, 0);
-    lobbyComposerRow->setSpacing(6);
-    lobbyComposerRow->addWidget(lobbyComposer, 1);
-    lobbyComposerRow->addWidget(m_btnCreateSwap);
-    lobbyBodyLayout->addLayout(lobbyComposerRow);
+    lobbyBodyLayout->addWidget(lobbyComposer);
 
     lobbyPaneLayout->addWidget(lobbyHeader);
     lobbyPaneLayout->addWidget(lobbyBody, 1);
@@ -762,7 +930,7 @@ QWidget* KailleraServerBrowserDialog::createGameListWidget()
     m_gameTable->setObjectName("KailleraSurface");
     m_gameTable->setProperty("mainGameList", true);
     m_gameTable->setHorizontalHeaderLabels({"Game", "GameID", "Emulator", "User", "Status", "Users"});
-    m_gameTable->horizontalHeader()->setStretchLastSection(true);
+    m_gameTable->horizontalHeader()->setStretchLastSection(false);
     m_gameTable->verticalHeader()->setVisible(false);
     m_gameTable->setShowGrid(false);
     m_gameTable->setAlternatingRowColors(true);
@@ -792,6 +960,20 @@ QWidget* KailleraServerBrowserDialog::createGameListWidget()
     // Double-click a game to join it
     connect(m_gameTable, &QTableWidget::cellDoubleClicked, this, [this]() { onJoinGame(); });
     paneLayout->addWidget(m_gameTable, 1);
+    anchorTrailingTableColumn(m_gameTable, 5, 76, 2);
+
+    m_btnCreateSwap = new QPushButton(pane);
+    m_btnCreateSwap->setObjectName("KailleraFabButton");
+    m_btnCreateSwap->setToolTip("Create a game");
+    m_btnCreateSwap->setText("");
+    m_btnCreateSwap->setIcon(whiteLineIcon("add-line"));
+    m_btnCreateSwap->setIconSize(QSize(22, 22));
+    m_btnCreateSwap->setCursor(Qt::PointingHandCursor);
+    m_btnCreateSwap->setAutoDefault(false);
+    m_btnCreateSwap->setDefault(false);
+    connect(m_btnCreateSwap, &QPushButton::clicked, this, &KailleraServerBrowserDialog::onCreateOrSwap);
+    attachFloatingCornerButton(pane, m_btnCreateSwap, 14, 14);
+
     layout->addWidget(pane, 1);
     m_gameTable->sortByColumn(4, Qt::AscendingOrder);
 
@@ -1875,7 +2057,7 @@ void KailleraServerBrowserDialog::saveColumnWidths()
 
     // Save game table column widths
     QStringList gameWidths;
-    for (int i = 0; i < m_gameTable->columnCount(); ++i)
+    for (int i = 0; i < m_gameTable->columnCount() - 1; ++i)
         gameWidths << QString::number(m_gameTable->columnWidth(i));
     CoreSettingsSetValue(SettingsID::Kaillera_GameColumnWidths, gameWidths.join(",").toStdString());
 
@@ -1883,19 +2065,22 @@ void KailleraServerBrowserDialog::saveColumnWidths()
 
 void KailleraServerBrowserDialog::restoreColumnWidths()
 {
-    auto restoreTable = [](QTableWidget* table, const std::string& saved) {
+    auto restoreTable = [](QTableWidget* table, const std::string& saved, bool skipLastColumn) {
         if (saved.empty()) return;
         QStringList widths = QString::fromStdString(saved).split(",");
+        const int lastColumn = table->columnCount() - 1;
         for (int i = 0; i < widths.size() && i < table->columnCount(); ++i)
         {
+            if (skipLastColumn && i == lastColumn)
+                continue;
             int w = widths[i].toInt();
             if (w > 0)
                 table->setColumnWidth(i, w);
         }
     };
 
-    restoreTable(m_userTable, CoreSettingsGetStringValue(SettingsID::Kaillera_UserColumnWidths));
-    restoreTable(m_gameTable, CoreSettingsGetStringValue(SettingsID::Kaillera_GameColumnWidths));
+    restoreTable(m_userTable, CoreSettingsGetStringValue(SettingsID::Kaillera_UserColumnWidths), false);
+    restoreTable(m_gameTable, CoreSettingsGetStringValue(SettingsID::Kaillera_GameColumnWidths), true);
 }
 
 // ---- Lobby mode handlers ----
@@ -2475,8 +2660,11 @@ void KailleraServerBrowserDialog::onCreateOrSwap()
         }
         buildGameListMenu();
 
-        QAction* chosen = m_gameListMenu->exec(
-            m_btnCreateSwap->mapToGlobal(QPoint(0, m_btnCreateSwap->height())));
+        const QSize menuSize = m_gameListMenu->sizeHint();
+        const QPoint popupPos = m_btnCreateSwap->mapToGlobal(
+            QPoint(m_btnCreateSwap->width() - menuSize.width(), -menuSize.height() + 6));
+
+        QAction* chosen = m_gameListMenu->exec(popupPos);
         if (chosen != nullptr)
         {
             const QString selectedGame = chosen->data().toString();

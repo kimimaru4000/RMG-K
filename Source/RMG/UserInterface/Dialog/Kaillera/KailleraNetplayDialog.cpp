@@ -42,11 +42,15 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
+#include <QFrame>
+#include <QListWidget>
+#include <QStringList>
 
 #include <cstring>
 #include <ctime>
 #include <fstream>
 #include <future>
+#include <algorithm>
 
 #include <windows.h>
 
@@ -54,6 +58,147 @@ static QString getKailleraRecordsDirectory()
 {
     return QString::fromStdString(CoreGetKailleraRecordsDirectory());
 }
+
+class SearchableComboBox final : public QComboBox
+{
+public:
+    explicit SearchableComboBox(QWidget* parent = nullptr)
+        : QComboBox(parent)
+    {
+        setSizeAdjustPolicy(QComboBox::AdjustToContentsOnFirstShow);
+    }
+
+    void showPopup() override
+    {
+        if (count() == 0)
+        {
+            return;
+        }
+
+        if (m_popup == nullptr)
+        {
+            m_popup = new QFrame(this, Qt::Popup | Qt::FramelessWindowHint);
+            m_popup->setObjectName("KailleraSearchPopup");
+            auto* popupLayout = new QVBoxLayout(m_popup);
+            popupLayout->setContentsMargins(8, 8, 8, 8);
+            popupLayout->setSpacing(6);
+
+            m_searchEdit = new QLineEdit(m_popup);
+            m_searchEdit->setPlaceholderText("Search ROMs...");
+            popupLayout->addWidget(m_searchEdit);
+
+            m_listWidget = new QListWidget(m_popup);
+            m_listWidget->setSelectionMode(QAbstractItemView::SingleSelection);
+            m_listWidget->setUniformItemSizes(true);
+            popupLayout->addWidget(m_listWidget);
+
+            connect(m_searchEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
+                refreshPopupItems(text);
+            });
+            connect(m_searchEdit, &QLineEdit::returnPressed, this, [this]() {
+                if (m_listWidget == nullptr || m_listWidget->count() == 0)
+                {
+                    return;
+                }
+
+                QListWidgetItem* item = m_listWidget->currentItem();
+                if (item == nullptr)
+                {
+                    item = m_listWidget->item(0);
+                }
+                activatePopupItem(item);
+            });
+            connect(m_listWidget, &QListWidget::itemClicked, this, [this](QListWidgetItem* item) {
+                activatePopupItem(item);
+            });
+            connect(m_listWidget, &QListWidget::itemActivated, this, [this](QListWidgetItem* item) {
+                activatePopupItem(item);
+            });
+        }
+
+        refreshPopupItems(QString());
+        m_searchEdit->clear();
+
+        const int popupWidth = qMax(width(), 340);
+        const int visibleItems = qMin(10, qMax(1, m_listWidget->count()));
+        const int rowHeight = m_listWidget->sizeHintForRow(0) > 0 ? m_listWidget->sizeHintForRow(0) : 22;
+        const int popupHeight = 16 + m_searchEdit->sizeHint().height() + 6 + (visibleItems * rowHeight) + 16;
+
+        const QPoint below = mapToGlobal(QPoint(0, height()));
+        m_popup->resize(popupWidth, popupHeight);
+        m_popup->move(below);
+        m_popup->show();
+        m_searchEdit->setFocus();
+    }
+
+    void hidePopup() override
+    {
+        if (m_popup != nullptr)
+        {
+            m_popup->hide();
+        }
+    }
+
+private:
+    void refreshPopupItems(const QString& filter)
+    {
+        if (m_listWidget == nullptr)
+        {
+            return;
+        }
+
+        const QString normalizedFilter = filter.trimmed();
+        const QString currentValue = currentText();
+
+        m_listWidget->clear();
+        int selectedRow = -1;
+        for (int i = 0; i < count(); ++i)
+        {
+            const QString itemText = itemTextAt(i);
+            if (!normalizedFilter.isEmpty()
+                && !itemText.contains(normalizedFilter, Qt::CaseInsensitive))
+            {
+                continue;
+            }
+
+            auto* item = new QListWidgetItem(itemText, m_listWidget);
+            item->setData(Qt::UserRole, i);
+            if (selectedRow < 0 && itemText == currentValue)
+            {
+                selectedRow = m_listWidget->count() - 1;
+            }
+        }
+
+        if (m_listWidget->count() > 0)
+        {
+            m_listWidget->setCurrentRow(selectedRow >= 0 ? selectedRow : 0);
+        }
+    }
+
+    QString itemTextAt(int index) const
+    {
+        return QComboBox::itemText(index);
+    }
+
+    void activatePopupItem(QListWidgetItem* item)
+    {
+        if (item == nullptr)
+        {
+            return;
+        }
+
+        const int sourceIndex = item->data(Qt::UserRole).toInt();
+        if (sourceIndex >= 0 && sourceIndex < count())
+        {
+            setCurrentIndex(sourceIndex);
+        }
+        hidePopup();
+    }
+
+    QFrame* m_popup = nullptr;
+    QLineEdit* m_searchEdit = nullptr;
+    QListWidget* m_listWidget = nullptr;
+};
 
 KailleraNetplayDialog::KailleraNetplayDialog(QWidget* parent)
     : QDialog(parent)
@@ -134,27 +279,10 @@ void KailleraNetplayDialog::setupUI()
     // Mode tabs
     m_tabWidget = new QTabWidget(this);
     m_tabWidget->addTab(createServerTab(), "Server");
-    m_tabWidget->addTab(createP2PTab(), "P2P");
+    m_tabWidget->addTab(createP2PTab(), "Peer to Peer");
     m_tabWidget->addTab(createPlaybackTab(), "Playback");
     connect(m_tabWidget, &QTabWidget::currentChanged, this, &KailleraNetplayDialog::onTabChanged);
     mainLayout->addWidget(m_tabWidget);
-
-    // Bottom buttons
-    auto* bottomLayout = new QHBoxLayout();
-    auto* btnAbout = new QPushButton("About", this);
-    connect(btnAbout, &QPushButton::clicked, this, [this]() {
-        QMessageBox::about(this, "About RMG-K Netplay",
-            "RMG-K Netplay\n\n"
-            "Kaillera client based on n02 (Open Kaillera)\n"
-            "Supports Server, P2P, and Playback modes.\n\n"
-            "https://github.com/Jay-Day/RMG-K");
-    });
-    bottomLayout->addWidget(btnAbout);
-    bottomLayout->addStretch();
-    m_btnClose = new QPushButton("Close", this);
-    connect(m_btnClose, &QPushButton::clicked, this, &QDialog::reject);
-    bottomLayout->addWidget(m_btnClose);
-    mainLayout->addLayout(bottomLayout);
 }
 
 QWidget* KailleraNetplayDialog::createServerTab()
@@ -245,55 +373,33 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     auto* hostTab = new QWidget();
     auto* hostLayout = new QVBoxLayout(hostTab);
 
-    // Game name field
+    // Game picker
     auto* gameLayout = new QHBoxLayout();
-    gameLayout->addWidget(new QLabel("Game:", hostTab));
-    m_p2pGameEdit = new QLineEdit(hostTab);
-    m_p2pGameEdit->setReadOnly(true);
-    gameLayout->addWidget(m_p2pGameEdit);
+    gameLayout->addWidget(new QLabel("ROM:", hostTab));
+    m_p2pGameCombo = new SearchableComboBox(hostTab);
+    m_p2pGameCombo->setToolTip("Choose the ROM to host");
+    gameLayout->addWidget(m_p2pGameCombo, 1);
     hostLayout->addLayout(gameLayout);
 
-    // Game list (single-column table to match server list appearance)
-    m_p2pGameList = new QTableWidget(0, 1, hostTab);
-    m_p2pGameList->setHorizontalHeaderLabels({"Game"});
-    m_p2pGameList->horizontalHeader()->setStretchLastSection(true);
-    m_p2pGameList->verticalHeader()->setVisible(false);
-    m_p2pGameList->setShowGrid(false);
-    m_p2pGameList->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_p2pGameList->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_p2pGameList->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_p2pGameList->setSortingEnabled(true);
-
-    // Populate from kailleraInfos game list (double-null terminated)
+    QStringList gameNames;
     if (infos.gameList)
     {
-        m_p2pGameList->setSortingEnabled(false);
         const char* p = infos.gameList;
         while (*p)
         {
-            int row = m_p2pGameList->rowCount();
-            m_p2pGameList->insertRow(row);
-            m_p2pGameList->setItem(row, 0, new QTableWidgetItem(QString::fromUtf8(p)));
+            gameNames.append(QString::fromUtf8(p));
             p += strlen(p) + 1;
         }
-        m_p2pGameList->setSortingEnabled(true);
     }
-
-    // Select first game by default
-    if (m_p2pGameList->rowCount() > 0)
-    {
-        m_p2pGameList->selectRow(0);
-        m_p2pGameEdit->setText(m_p2pGameList->item(0, 0)->text());
-    }
-
-    connect(m_p2pGameList, &QTableWidget::currentCellChanged, this, [this](int row, int, int, int) {
-        if (row >= 0 && m_p2pGameList->item(row, 0))
-        {
-            m_p2pGameEdit->setText(m_p2pGameList->item(row, 0)->text());
-        }
+    std::sort(gameNames.begin(), gameNames.end(), [](const QString& a, const QString& b) {
+        return QString::localeAwareCompare(a, b) < 0;
     });
+    m_p2pGameCombo->addItems(gameNames);
 
-    hostLayout->addWidget(m_p2pGameList);
+    if (m_p2pGameCombo->count() > 0)
+    {
+        m_p2pGameCombo->setCurrentIndex(0);
+    }
 
     // Host port + Host button
     auto* hostBtnLayout = new QHBoxLayout();
@@ -1271,11 +1377,11 @@ void KailleraNetplayDialog::onP2PHost()
     QByteArray usernameBytes = m_usernameEdit->text().toUtf8();
     if (usernameBytes.isEmpty()) usernameBytes = "Player";
 
-    // Use selected game from game list
-    QString gameName = m_p2pGameEdit->text().trimmed();
+    // Use selected game from the host picker
+    QString gameName = (m_p2pGameCombo != nullptr) ? m_p2pGameCombo->currentText().trimmed() : QString();
     if (gameName.isEmpty())
     {
-        QMessageBox::warning(this, "P2P Host", "No game selected. Please select a game from the list.");
+        QMessageBox::warning(this, "P2P Host", "No game selected. Choose a ROM to host.");
         return;
     }
     QByteArray gameBytes = gameName.toUtf8();

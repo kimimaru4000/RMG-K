@@ -115,8 +115,7 @@ private:
     QPushButton* m_btnWaitingGames = nullptr;
 
     // P2P tab controls (Host sub-tab)
-    QLineEdit* m_p2pGameEdit = nullptr;
-    QTableWidget* m_p2pGameList = nullptr;
+    QComboBox* m_p2pGameCombo = nullptr;
     QLineEdit* m_p2pPortEdit = nullptr;
     QPushButton* m_btnP2PHost = nullptr;
 
@@ -154,8 +153,6 @@ private:
     // Network manager for master list fetching
     QNetworkAccessManager* m_netManager = nullptr;
 
-    // Bottom bar
-    QPushButton* m_btnClose = nullptr;
 };
 
 #endif // _WIN32
