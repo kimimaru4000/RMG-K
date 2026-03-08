@@ -28,6 +28,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGroupBox>
+#include <QSizePolicy>
 #include <QResizeEvent>
 #include <QTabBar>
 #include <QEventLoop>
@@ -50,6 +51,7 @@
 #include <QMouseEvent>
 #include <QScrollBar>
 #include <QSignalBlocker>
+#include <QStyledItemDelegate>
 #include <QStringList>
 
 #include <chrono>
@@ -74,6 +76,17 @@ static QIcon themedLineIcon(const QString& iconName)
     const QString iconPath = QString(":/icons/%1/svg/%2.svg")
         .arg(darkTheme ? "white" : "black", iconName);
     return QIcon(iconPath);
+}
+
+static QIcon themedFavoriteIcon(const QString& iconName)
+{
+    const QString theme = QString::fromStdString(CoreSettingsGetStringValue(SettingsID::GUI_Theme));
+    if (theme == "Fusion Dark")
+    {
+        return QIcon(QString(":/icons/white/svg/%1.svg").arg(iconName));
+    }
+
+    return themedLineIcon(iconName);
 }
 
 static bool isPrivateHostPort(const QString& hostPort)
@@ -277,6 +290,47 @@ private:
     bool m_suppressPopupUntilMouseRelease = false;
 };
 
+class CenteredIconDelegate final : public QStyledItemDelegate
+{
+public:
+    explicit CenteredIconDelegate(QObject* parent = nullptr)
+        : QStyledItemDelegate(parent)
+    {
+    }
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option,
+        const QModelIndex& index) const override
+    {
+        QStyleOptionViewItem viewOption(option);
+        initStyleOption(&viewOption, index);
+
+        const QIcon icon = qvariant_cast<QIcon>(index.data(Qt::UserRole));
+        const bool hasText = !viewOption.text.isEmpty();
+        if (icon.isNull() || hasText)
+        {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        viewOption.icon = QIcon();
+        viewOption.text.clear();
+        viewOption.features &= ~QStyleOptionViewItem::HasDecoration;
+        viewOption.features &= ~QStyleOptionViewItem::HasDisplay;
+        QStyledItemDelegate::paint(painter, viewOption, index);
+
+        const QSize iconSize = viewOption.decorationSize.isValid()
+            ? viewOption.decorationSize
+            : QSize(16, 16);
+        const QRect iconRect(
+            viewOption.rect.x() + (viewOption.rect.width() - iconSize.width()) / 2,
+            viewOption.rect.y() + (viewOption.rect.height() - iconSize.height()) / 2,
+            iconSize.width(),
+            iconSize.height());
+        icon.paint(painter, iconRect, Qt::AlignCenter,
+            option.state & QStyle::State_Enabled ? QIcon::Normal : QIcon::Disabled);
+    }
+};
+
 class FloatingCornerButtonFilter final : public QObject
 {
 public:
@@ -329,6 +383,28 @@ static void attachFloatingCornerButton(QWidget* container, QWidget* button, int 
 
     container->installEventFilter(
         new FloatingCornerButtonFilter(container, button, rightMargin, bottomMargin));
+}
+
+static void configureLauncherButtonMetrics(QPushButton* button)
+{
+    if (button == nullptr)
+    {
+        return;
+    }
+
+    button->setMinimumHeight(32);
+    button->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+}
+
+static void configureLauncherTallButtonMetrics(QPushButton* button)
+{
+    if (button == nullptr)
+    {
+        return;
+    }
+
+    button->setMinimumHeight(56);
+    button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 }
 
 class LauncherTabBar final : public QTabBar
@@ -412,7 +488,7 @@ static QString buildLauncherStyleSheet(const QString& theme)
     const QString comboArrowIcon = QString(":/icons/%1/svg/arrow-down-s-line.svg")
         .arg(darkTheme ? "white" : "black");
 
-    return QString(
+    QString style = QString(
         "QDialog#KailleraLauncherDialog {"
         "  background-color: palette(window);"
         "}"
@@ -516,48 +592,6 @@ static QString buildLauncherStyleSheet(const QString& theme)
         "QHeaderView::section:first {"
         "  border-left: none;"
         "}"
-        "QPushButton#KailleraPrimaryButton {"
-        "  border: 1px solid #0066b4;"
-        "  border-radius: %6;"
-        "  min-height: 24px;"
-        "  padding: 4px 12px;"
-        "  font-weight: 700;"
-        "  color: white;"
-        "  background-color: #0078D7;"
-        "}"
-        "QPushButton#KailleraPrimaryButton:hover {"
-        "  background-color: #1584dd;"
-        "}"
-        "QPushButton#KailleraPrimaryButton:pressed {"
-        "  background-color: #0063b1;"
-        "}"
-        "QPushButton#KailleraSecondaryButton {"
-        "  border: 1px solid palette(mid);"
-        "  border-radius: %6;"
-        "  min-height: 24px;"
-        "  padding: 4px 12px;"
-        "  background-color: palette(button);"
-        "}"
-        "QPushButton#KailleraSecondaryButton:hover {"
-        "  background-color: palette(light);"
-        "}"
-        "QPushButton#KailleraSecondaryButton:pressed {"
-        "  background-color: palette(midlight);"
-        "}"
-        "QPushButton#KailleraFabButton {"
-        "  border: 1px solid #005a9e;"
-        "  border-radius: %11;"
-        "  padding: 0px;"
-        "  background-color: #0078D7;"
-        "  color: white;"
-        "}"
-        "QPushButton#KailleraFabButton:hover {"
-        "  background-color: #1c88dc;"
-        "}"
-        "QPushButton#KailleraFabButton:pressed {"
-        "  border-color: #004f8b;"
-        "  background-color: #005a9e;"
-        "}"
         "QFrame#KailleraDivider {"
         "  background-color: %12;"
         "  max-height: 1px;"
@@ -574,6 +608,53 @@ static QString buildLauncherStyleSheet(const QString& theme)
             comboArrowIcon,
             fabRadius,
             dividerColor);
+
+    if (modern)
+    {
+        style += QString(
+            "QPushButton#KailleraPrimaryButton {"
+            "  border: 1px solid #0066b4;"
+            "  border-radius: %1;"
+            "  padding: 4px 12px;"
+            "  font-weight: 700;"
+            "  color: white;"
+            "  background-color: #0078D7;"
+            "}"
+            "QPushButton#KailleraPrimaryButton:hover {"
+            "  background-color: #1584dd;"
+            "}"
+            "QPushButton#KailleraPrimaryButton:pressed {"
+            "  background-color: #0063b1;"
+            "}"
+            "QPushButton#KailleraSecondaryButton {"
+            "  border: 1px solid palette(mid);"
+            "  border-radius: %1;"
+            "  padding: 4px 12px;"
+            "  background-color: palette(button);"
+            "}"
+            "QPushButton#KailleraSecondaryButton:hover {"
+            "  background-color: palette(light);"
+            "}"
+            "QPushButton#KailleraSecondaryButton:pressed {"
+            "  background-color: palette(midlight);"
+            "}"
+            "QPushButton#KailleraFabButton {"
+            "  border: 1px solid #005a9e;"
+            "  border-radius: %2;"
+            "  padding: 0px;"
+            "  background-color: #0078D7;"
+            "  color: white;"
+            "}"
+            "QPushButton#KailleraFabButton:hover {"
+            "  background-color: #1c88dc;"
+            "}"
+            "QPushButton#KailleraFabButton:pressed {"
+            "  border-color: #004f8b;"
+            "  background-color: #005a9e;"
+            "}").arg(controlRadius, fabRadius);
+    }
+
+    return style;
 }
 
 KailleraNetplayDialog::KailleraNetplayDialog(QWidget* parent)
@@ -702,6 +783,7 @@ QWidget* KailleraNetplayDialog::createServerTab()
     m_serverTable->setColumnWidth(2, 58);
     m_serverTable->setColumnWidth(3, 60);
     m_serverTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_serverTable->setItemDelegateForColumn(0, new CenteredIconDelegate(m_serverTable));
     connect(m_serverTable, &QTableWidget::cellDoubleClicked, this, &KailleraNetplayDialog::onServerDoubleClicked);
     connect(m_serverTable, &QWidget::customContextMenuRequested, this, &KailleraNetplayDialog::onServerRightClicked);
     connect(m_serverTable, &QTableWidget::cellClicked, this, [this](int row, int column) {
@@ -752,8 +834,10 @@ QWidget* KailleraNetplayDialog::createServerTab()
     btnLayout->setSpacing(10);
     m_btnWaitingGames = new QPushButton("Waiting Games", tab);
     m_btnWaitingGames->setObjectName("KailleraSecondaryButton");
+    configureLauncherButtonMetrics(m_btnWaitingGames);
     m_btnConnect = new QPushButton("Connect", tab);
     m_btnConnect->setObjectName("KailleraPrimaryButton");
+    configureLauncherButtonMetrics(m_btnConnect);
     auto* frameDelayLabel = new QLabel("Frame Delay:", tab);
     frameDelayLabel->setObjectName("KailleraFieldLabel");
     m_frameDelayCombo = new QComboBox(tab);
@@ -848,6 +932,7 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     hostBtnLayout->addStretch();
     m_btnP2PHost = new QPushButton("Host", hostBody);
     m_btnP2PHost->setObjectName("KailleraPrimaryButton");
+    configureLauncherButtonMetrics(m_btnP2PHost);
     connect(m_btnP2PHost, &QPushButton::clicked, this, &KailleraNetplayDialog::onP2PHost);
     hostBtnLayout->addWidget(m_btnP2PHost);
     hostBodyLayout->addLayout(hostBtnLayout);
@@ -884,10 +969,12 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     addrLayout->addWidget(m_p2pHostEdit, 1);
     m_btnP2PJoin = new QPushButton("Connect", connectBody);
     m_btnP2PJoin->setObjectName("KailleraPrimaryButton");
+    configureLauncherButtonMetrics(m_btnP2PJoin);
     connect(m_btnP2PJoin, &QPushButton::clicked, this, &KailleraNetplayDialog::onP2PJoin);
     addrLayout->addWidget(m_btnP2PJoin);
     m_btnP2PPasteGo = new QPushButton("Paste && Go", connectBody);
     m_btnP2PPasteGo->setObjectName("KailleraSecondaryButton");
+    configureLauncherButtonMetrics(m_btnP2PPasteGo);
     connect(m_btnP2PPasteGo, &QPushButton::clicked, this, &KailleraNetplayDialog::onP2PPasteAndGo);
     addrLayout->addWidget(m_btnP2PPasteGo);
     connectBodyLayout->addLayout(addrLayout);
@@ -900,6 +987,7 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     m_btnP2PWaitingGames = new QPushButton("Waiting\nGames", connectBody);
     m_btnP2PWaitingGames->setObjectName("KailleraSecondaryButton");
     m_btnP2PWaitingGames->setFixedWidth(88);
+    configureLauncherTallButtonMetrics(m_btnP2PWaitingGames);
     connect(m_btnP2PWaitingGames, &QPushButton::clicked, this, &KailleraNetplayDialog::onP2PWaitingGames);
     storedBtnLayout->addStretch();
     storedBtnLayout->addWidget(m_btnP2PWaitingGames);
@@ -919,6 +1007,7 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     m_p2pStoredTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_p2pStoredTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_p2pStoredTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_p2pStoredTable->setItemDelegateForColumn(0, new CenteredIconDelegate(m_p2pStoredTable));
     connect(m_p2pStoredTable, &QTableWidget::cellClicked, this, &KailleraNetplayDialog::onP2PStoredClicked);
     storedRightLayout->addWidget(m_p2pStoredTable, 1);
     storedAreaLayout->addLayout(storedRightLayout, 1);
@@ -1115,7 +1204,7 @@ void KailleraNetplayDialog::refreshServerListDisplay()
         const bool favorite = (favoriteServerIndexByHost(server.host) >= 0);
 
         auto* favoriteItem = new QTableWidgetItem();
-        favoriteItem->setIcon(themedLineIcon(favorite ? "star-fill" : "star"));
+        favoriteItem->setData(Qt::UserRole, themedFavoriteIcon(favorite ? "star-fill" : "star"));
         favoriteItem->setTextAlignment(Qt::AlignCenter);
         favoriteItem->setFlags((favoriteItem->flags() | Qt::ItemIsEnabled | Qt::ItemIsSelectable)
             & ~Qt::ItemIsEditable);
@@ -2301,7 +2390,7 @@ void KailleraNetplayDialog::refreshP2PStoredDisplay()
     for (int i = 0; i < m_p2pStoredUsers.size(); i++)
     {
         auto* favoriteItem = new QTableWidgetItem();
-        favoriteItem->setIcon(themedLineIcon(m_p2pStoredUsers[i].favorite ? "star-fill" : "star"));
+        favoriteItem->setData(Qt::UserRole, themedFavoriteIcon(m_p2pStoredUsers[i].favorite ? "star-fill" : "star"));
         favoriteItem->setTextAlignment(Qt::AlignCenter);
         favoriteItem->setFlags((favoriteItem->flags() | Qt::ItemIsEnabled | Qt::ItemIsSelectable)
             & ~Qt::ItemIsEditable);
