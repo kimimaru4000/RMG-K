@@ -66,6 +66,14 @@ $XVFB_RUN "$script_dir/lib4bin" --dst-dir "$bin_dir" \
 	"$lib_dir"/libvulkan* \
 	"$lib_dir"/dri/* \
 	"$lib_dir"/libssl.so* \
+	"$lib_dir"/libQt6Core.so* \
+	"$lib_dir"/libQt6Gui.so* \
+	"$lib_dir"/libQt6Widgets.so* \
+	"$lib_dir"/libQt6Network.so* \
+	"$lib_dir"/libQt6WebSockets.so* \
+	"$lib_dir"/libQt6DBus.so* \
+	"$lib_dir"/libQt6Svg.so* \
+	"$lib_dir"/libQt6SvgWidgets.so* \
 	"$lib_dir"/qt6/plugins/iconengines/* \
 	"$lib_dir"/qt6/plugins/imageformats/* \
 	"$lib_dir"/qt6/plugins/platforms/* \
