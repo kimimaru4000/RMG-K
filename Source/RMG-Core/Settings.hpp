@@ -74,6 +74,8 @@ enum class SettingsID
     Kaillera_BeepOnJoin,
     Kaillera_JoinMessageHost,
     Kaillera_JoinMessageJoin,
+    Kaillera_P2PStaticCode,
+    Kaillera_P2PStaticCodeOwnerToken,
     Kaillera_ServerListNames,
     Kaillera_ServerListHosts,
     Kaillera_LiveServerCacheNames,

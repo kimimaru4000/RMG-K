@@ -256,6 +256,12 @@ static l_Setting get_setting(SettingsID settingId)
     case SettingsID::Kaillera_JoinMessageJoin:
         setting = {SETTING_SECTION_KAILLERA, "JoinMessageJoin", std::string("")};
         break;
+    case SettingsID::Kaillera_P2PStaticCode:
+        setting = {SETTING_SECTION_KAILLERA, "P2PStaticCode", std::string("")};
+        break;
+    case SettingsID::Kaillera_P2PStaticCodeOwnerToken:
+        setting = {SETTING_SECTION_KAILLERA, "P2PStaticCodeOwnerToken", std::string("")};
+        break;
     case SettingsID::Kaillera_ServerListNames:
         setting = {SETTING_SECTION_KAILLERA, "ServerListNames", std::string("")};
         break;

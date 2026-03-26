@@ -10,6 +10,7 @@
 #include "KailleraNetplayDialog.hpp"
 #include "KailleraServerBrowserDialog.hpp"
 #include "KailleraP2PDialog.hpp"
+#include "KailleraTraversalConfig.hpp"
 #include "KailleraWaitingGamesDialog.hpp"
 
 #ifdef _WIN32
@@ -39,9 +40,11 @@
 #include <QUrl>
 #include <QApplication>
 #include <QClipboard>
+#include <QHostInfo>
 #include <QMenu>
 #include <QProcess>
 #include <QSettings>
+#include <QUdpSocket>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
@@ -66,6 +69,84 @@
 #include <windows.h>
 
 static constexpr int kMaxP2PRecentEntries = 12;
+
+namespace {
+
+class PatternedCodeLineEdit final : public QLineEdit
+{
+public:
+    explicit PatternedCodeLineEdit(QWidget* parent = nullptr)
+        : QLineEdit(parent)
+    {
+        setMaxLength(7);
+        setPlaceholderText("ABC#123");
+
+        QObject::connect(this, &QLineEdit::textEdited, this, [this](const QString& text) {
+            applyNormalizedText(text);
+        });
+    }
+
+private:
+    static QString normalizeCodeText(const QString& rawText)
+    {
+        QString letters;
+        QString digits;
+        bool numericSectionStarted = false;
+
+        for (const QChar& ch : rawText)
+        {
+            if (ch.isLetter())
+            {
+                if (!numericSectionStarted && letters.size() < 3)
+                {
+                    letters += ch.toUpper();
+                }
+                continue;
+            }
+
+            if (ch == '#')
+            {
+                if (letters.size() == 3)
+                {
+                    numericSectionStarted = true;
+                }
+                continue;
+            }
+
+            if (ch.isDigit())
+            {
+                if (letters.size() == 3 && digits.size() < 3)
+                {
+                    numericSectionStarted = true;
+                    digits += ch;
+                }
+                continue;
+            }
+        }
+
+        if (!numericSectionStarted)
+        {
+            return letters;
+        }
+
+        return letters + "#" + digits;
+    }
+
+    void applyNormalizedText(const QString& rawText)
+    {
+        const QString normalized = normalizeCodeText(rawText);
+        if (normalized == text())
+        {
+            return;
+        }
+
+        const QSignalBlocker blocker(this);
+        setText(normalized);
+        setCursorPosition(normalized.size());
+    }
+};
+
+} // namespace
 
 static QString getKailleraRecordsDirectory()
 {
@@ -114,6 +195,94 @@ static bool isPrivateHostPort(const QString& hostPort)
 
     return false;
 }
+
+static bool resolveTraversalServerAddress(QHostAddress& address)
+{
+    const QString host = QString::fromUtf8(kN02TraversalHost);
+    if (address.setAddress(host))
+    {
+        return true;
+    }
+
+    const QHostInfo hostInfo = QHostInfo::fromName(host);
+    for (const QHostAddress& candidate : hostInfo.addresses())
+    {
+        if (candidate.protocol() == QAbstractSocket::IPv4Protocol)
+        {
+            address = candidate;
+            return true;
+        }
+    }
+
+    for (const QHostAddress& candidate : hostInfo.addresses())
+    {
+        if (candidate.protocol() == QAbstractSocket::IPv6Protocol)
+        {
+            address = candidate;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool sendTraversalRequest(const QByteArray& payload, QList<QByteArray>& parts, QString& error)
+{
+    QUdpSocket socket;
+    if (!socket.bind(QHostAddress::AnyIPv4, 0, QUdpSocket::DefaultForPlatform))
+    {
+        error = "Failed to open a UDP socket for code configuration.";
+        return false;
+    }
+
+    QHostAddress serverAddress;
+    if (!resolveTraversalServerAddress(serverAddress))
+    {
+        error = "Failed to resolve the NAT server address.";
+        return false;
+    }
+
+    if (socket.writeDatagram(payload, serverAddress, kN02TraversalPort) < 0)
+    {
+        error = "Failed to send the code request to the NAT server.";
+        return false;
+    }
+
+    if (!socket.waitForReadyRead(2000))
+    {
+        error = "Timed out waiting for the NAT server.";
+        return false;
+    }
+
+    QByteArray response;
+    QHostAddress sender;
+    quint16 senderPort = 0;
+    while (socket.hasPendingDatagrams())
+    {
+        response.resize(static_cast<int>(socket.pendingDatagramSize()));
+        socket.readDatagram(response.data(), response.size(), &sender, &senderPort);
+    }
+    Q_UNUSED(sender);
+    Q_UNUSED(senderPort);
+
+    if (!response.isEmpty() && response[0] == '\0')
+    {
+        response.remove(0, 1);
+    }
+
+    parts = response.split('|');
+    if (parts.size() < 2 || parts[0] != kN02TraversalProtocol)
+    {
+        error = "Received an invalid response from the NAT server.";
+        return false;
+    }
+
+    return true;
+}
+
+static bool looksLikeTraversalCode(const QString& s);
+static QString normalizeTraversalCode(const QString& s);
+static QString normalizeTraversalClaimTarget(const QString& s);
 
 class SearchableComboBox final : public QComboBox
 {
@@ -839,6 +1008,26 @@ static QString buildLauncherStyleSheet(const QString& theme)
             "QPushButton#KailleraSecondaryButton:pressed {"
             "  background-color: palette(midlight);"
             "}"
+            "QPushButton#KailleraP2PIconButton {"
+            "  border: 1px solid palette(mid);"
+            "  border-radius: %1;"
+            "  padding: 0px;"
+            "  background-color: palette(button);"
+            "}"
+            "QPushButton#KailleraP2PIconButton:hover {"
+            "  background-color: palette(light);"
+            "}"
+            "QPushButton#KailleraP2PIconButton:pressed {"
+            "  background-color: palette(midlight);"
+            "}"
+            "QLineEdit#KailleraDisplayInput {"
+            "  border: 1px solid palette(mid);"
+            "  border-radius: %1;"
+            "  background-color: palette(window);"
+            "  color: palette(text);"
+            "  padding: 5px 8px;"
+            "  font-weight: 600;"
+            "}"
             "QPushButton#KailleraFabButton {"
             "  border: 1px solid #005a9e;"
             "  border-radius: %2;"
@@ -1164,17 +1353,37 @@ QWidget* KailleraNetplayDialog::createP2PTab()
         m_p2pGameCombo->setCurrentIndex(idx >= 0 ? idx : 0);
     }
 
-    // Host port + Host button
+    auto* codeLayout = new QHBoxLayout();
+    auto* codeLabel = new QLabel("Your code:", hostBody);
+    codeLabel->setObjectName("KailleraFieldLabel");
+    codeLayout->addWidget(codeLabel);
+    m_p2pCurrentCodeEdit = new QLineEdit(hostBody);
+    m_p2pCurrentCodeEdit->setObjectName("KailleraDisplayInput");
+    m_p2pCurrentCodeEdit->setReadOnly(true);
+    m_p2pCurrentCodeEdit->setFocusPolicy(Qt::NoFocus);
+    m_p2pCurrentCodeEdit->setCursor(Qt::ArrowCursor);
+    m_p2pCurrentCodeEdit->setAlignment(Qt::AlignCenter);
+    configureLauncherLineEditMetrics(m_p2pCurrentCodeEdit, theme);
+    m_p2pCurrentCodeEdit->setFixedWidth(100);
+    codeLayout->addWidget(m_p2pCurrentCodeEdit);
+    m_btnP2PCopyCode = new QPushButton(hostBody);
+    m_btnP2PCopyCode->setObjectName("KailleraP2PIconButton");
+    m_btnP2PCopyCode->setToolTip("Copy connect code");
+    m_btnP2PCopyCode->setIcon(themedLineIcon("file-line"));
+    m_btnP2PCopyCode->setIconSize(QSize(14, 14));
+    m_btnP2PCopyCode->setFixedSize(28, 28);
+    connect(m_btnP2PCopyCode, &QPushButton::clicked, this, &KailleraNetplayDialog::onCopyP2PCode);
+    codeLayout->addWidget(m_btnP2PCopyCode, 0, Qt::AlignVCenter);
+    m_btnP2PConfigureCode = new QPushButton("Configure", hostBody);
+    m_btnP2PConfigureCode->setObjectName("KailleraSecondaryButton");
+    configureLauncherButtonMetrics(m_btnP2PConfigureCode);
+    connect(m_btnP2PConfigureCode, &QPushButton::clicked, this, &KailleraNetplayDialog::onConfigureP2PCode);
+    codeLayout->addWidget(m_btnP2PConfigureCode);
+    codeLayout->addStretch();
+    hostBodyLayout->addLayout(codeLayout);
+
+    // Host button
     auto* hostBtnLayout = new QHBoxLayout();
-    auto* hostPortLabel = new QLabel("Host port:", hostBody);
-    hostPortLabel->setObjectName("KailleraFieldLabel");
-    hostBtnLayout->addWidget(hostPortLabel);
-    m_p2pPortEdit = new QLineEdit(hostBody);
-    m_p2pPortEdit->setObjectName("KailleraInput");
-    m_p2pPortEdit->setText("27886");
-    configureLauncherLineEditMetrics(m_p2pPortEdit, theme);
-    m_p2pPortEdit->setMaximumWidth(80);
-    hostBtnLayout->addWidget(m_p2pPortEdit);
     hostBtnLayout->addStretch();
     m_btnP2PHost = new QPushButton("Host", hostBody);
     m_btnP2PHost->setObjectName("KailleraPrimaryButton");
@@ -1216,10 +1425,10 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     auto* addrLabel = new QLabel("IP/Code:", connectBody);
     addrLabel->setObjectName("KailleraFieldLabel");
     addrLayout->addWidget(addrLabel);
-    const int p2pLabelWidth = qMax(gameLabel->sizeHint().width(),
-        qMax(hostPortLabel->sizeHint().width(), addrLabel->sizeHint().width()));
+    const int p2pLabelWidth = qMax(codeLabel->sizeHint().width(),
+        qMax(gameLabel->sizeHint().width(), addrLabel->sizeHint().width()));
+    codeLabel->setFixedWidth(p2pLabelWidth);
     gameLabel->setFixedWidth(p2pLabelWidth);
-    hostPortLabel->setFixedWidth(p2pLabelWidth);
     addrLabel->setFixedWidth(p2pLabelWidth);
     m_p2pHostEdit = new QLineEdit(connectBody);
     m_p2pHostEdit->setObjectName("KailleraInput");
@@ -1275,6 +1484,8 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     connectBodyLayout->addLayout(storedAreaLayout, 1);
     connectLayout->addWidget(connectBody);
     layout->addWidget(connectPane, 1);
+
+    refreshP2PStaticCodeDisplay();
 
     return tab;
 }
@@ -1972,6 +2183,91 @@ void KailleraNetplayDialog::updateServerButtons()
     }
 }
 
+QString KailleraNetplayDialog::currentP2PStaticCode() const
+{
+    return normalizeTraversalCode(
+        QString::fromStdString(CoreSettingsGetStringValue(SettingsID::Kaillera_P2PStaticCode)));
+}
+
+QString KailleraNetplayDialog::currentP2PStaticCodeOwnerToken() const
+{
+    return QString::fromStdString(
+        CoreSettingsGetStringValue(SettingsID::Kaillera_P2PStaticCodeOwnerToken)).trimmed();
+}
+
+static void releaseOldTraversalReservation(QWidget* parent, const QString& ownerToken)
+{
+    if (ownerToken.isEmpty())
+    {
+        return;
+    }
+
+    QList<QByteArray> parts;
+    QString error;
+    const QByteArray payload = QByteArray(kN02TraversalProtocol) + "|RELEASE|" + ownerToken.toUtf8();
+    if (!sendTraversalRequest(payload, parts, error))
+    {
+        QMessageBox::warning(parent, "Configure P2P Code",
+            "Your new code was saved, but the old code could not be released.\n" + error);
+        return;
+    }
+
+    if (parts[1] == "OK")
+    {
+        return;
+    }
+
+    if (parts[1] == "ERR" && parts.size() >= 3)
+    {
+        const QString reason = QString::fromUtf8(parts[2]);
+        if (reason == "NOAUTH")
+        {
+            return;
+        }
+
+        QMessageBox::warning(parent, "Configure P2P Code",
+            "Your new code was saved, but the old code could not be released.\nNAT server error: " + reason);
+        return;
+    }
+
+    QMessageBox::warning(parent, "Configure P2P Code",
+        "Your new code was saved, but the old code could not be released.");
+}
+
+void KailleraNetplayDialog::refreshP2PStaticCodeDisplay()
+{
+    if (!m_p2pCurrentCodeEdit)
+    {
+        return;
+    }
+
+    const QString code = currentP2PStaticCode();
+    if (!code.isEmpty())
+    {
+        m_p2pCurrentCodeEdit->setText(code);
+    }
+    else
+    {
+        m_p2pCurrentCodeEdit->setText("None");
+    }
+
+    if (m_btnP2PCopyCode)
+    {
+        m_btnP2PCopyCode->setEnabled(!code.isEmpty());
+    }
+}
+
+void KailleraNetplayDialog::onCopyP2PCode()
+{
+    const QString code = currentP2PStaticCode();
+    if (code.isEmpty())
+    {
+        return;
+    }
+
+    QApplication::clipboard()->setText(code);
+}
+
 void KailleraNetplayDialog::onStateMachineTimer()
 {
     // Drive the KSSDFA state machine one step (non-blocking)
@@ -1990,6 +2286,241 @@ void KailleraNetplayDialog::onTabChanged(int index)
     // n02 mode: 0=P2P, 1=Server
     int mode = (index == 1) ? 0 : 1;
     n02::activateMode(mode);
+}
+
+void KailleraNetplayDialog::onConfigureP2PCode()
+{
+    QString requested = currentP2PStaticCode();
+    const QString oldCode = currentP2PStaticCode();
+    const QString oldOwnerToken = currentP2PStaticCodeOwnerToken();
+
+    while (true)
+    {
+        QDialog dlg(this);
+        dlg.setWindowTitle("Configure P2P Code");
+        auto* layout = new QVBoxLayout(&dlg);
+        layout->setContentsMargins(12, 12, 12, 12);
+        layout->setSpacing(8);
+
+        auto* infoLabel = new QLabel(
+            "Customize your host connect code below.\n"
+            "Connect codes must match the form ABC#123.",
+            &dlg);
+        infoLabel->setWordWrap(true);
+
+        auto* codeEdit = new PatternedCodeLineEdit(&dlg);
+        codeEdit->setFixedWidth(92);
+        if (!requested.isEmpty())
+        {
+            codeEdit->setText(requested);
+            codeEdit->selectAll();
+        }
+
+        auto* statusLabel = new QLabel(&dlg);
+        statusLabel->setWordWrap(true);
+        statusLabel->setFixedWidth(320);
+        statusLabel->setFixedHeight(statusLabel->fontMetrics().lineSpacing() + 4);
+        statusLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        statusLabel->setText(QString());
+
+        auto* btnCheck = new QPushButton("Check Availability", &dlg);
+        auto* inputLayout = new QHBoxLayout();
+        inputLayout->setContentsMargins(0, 0, 0, 0);
+        inputLayout->setSpacing(8);
+        inputLayout->addWidget(codeEdit);
+        inputLayout->addWidget(btnCheck);
+        inputLayout->addStretch();
+
+        auto* btnLayout = new QHBoxLayout();
+        btnLayout->setContentsMargins(0, 0, 0, 0);
+        btnLayout->setSpacing(8);
+        auto* btnAccept = new QPushButton("Accept", &dlg);
+        auto* btnCancel = new QPushButton("Cancel", &dlg);
+        btnAccept->setEnabled(false);
+        btnLayout->addWidget(btnAccept);
+        btnLayout->addWidget(btnCancel);
+        btnLayout->addStretch();
+
+        layout->addWidget(infoLabel);
+        layout->addSpacing(4);
+        layout->addLayout(inputLayout);
+        layout->addWidget(statusLabel);
+        layout->addLayout(btnLayout);
+
+        QString approvedTarget;
+        const QString ownerToken = currentP2PStaticCodeOwnerToken();
+
+        auto setStatus = [&statusLabel](const QString& text, const QString& color) {
+            statusLabel->setStyleSheet("color: " + color + ";");
+            statusLabel->setText(text);
+        };
+
+        auto resetAvailability = [&]() {
+            approvedTarget.clear();
+            btnAccept->setEnabled(false);
+            statusLabel->setStyleSheet(QString());
+            statusLabel->clear();
+        };
+
+        auto runCheck = [&]() {
+            const QString normalizedRequest = normalizeTraversalClaimTarget(codeEdit->text());
+            if (normalizedRequest.isEmpty())
+            {
+                resetAvailability();
+                setStatus("Enter exactly 3 letters or a full code like CAT#123.", "#b00020");
+                return;
+            }
+
+            QList<QByteArray> parts;
+            QString error;
+            QByteArray payload = QByteArray(kN02TraversalProtocol) + "|CHECK|" + normalizedRequest.toUtf8();
+            if (!ownerToken.isEmpty())
+            {
+                payload += "|" + ownerToken.toUtf8();
+            }
+
+            if (!sendTraversalRequest(payload, parts, error))
+            {
+                QMessageBox::warning(this, "Configure P2P Code", error);
+                return;
+            }
+
+            resetAvailability();
+
+            if (parts[1] == "CHECKOK" && parts.size() >= 3)
+            {
+                const QString code = normalizeTraversalCode(QString::fromUtf8(parts[2]));
+                if (code.isEmpty())
+                {
+                    QMessageBox::warning(this, "Configure P2P Code",
+                        "The NAT server returned an invalid availability response.");
+                    return;
+                }
+
+                approvedTarget = code;
+                {
+                    const QSignalBlocker blocker(codeEdit);
+                    codeEdit->setText(code);
+                }
+                btnAccept->setEnabled(true);
+                setStatus(code + " is available.", "#0b6e2e");
+                return;
+            }
+
+            if (parts[1] == "CHECKSUGGEST" && parts.size() >= 4)
+            {
+                const QString requestedCode = normalizeTraversalCode(QString::fromUtf8(parts[2]));
+                const QString suggestedCode = normalizeTraversalCode(QString::fromUtf8(parts[3]));
+                if (!suggestedCode.isEmpty())
+                {
+                    const QSignalBlocker blocker(codeEdit);
+                    codeEdit->setText(suggestedCode);
+                    codeEdit->selectAll();
+                }
+
+                if (!requestedCode.isEmpty() && !suggestedCode.isEmpty())
+                {
+                    setStatus(requestedCode + " is unavailable. Suggested code: " + suggestedCode + ".", "#b00020");
+                }
+                else
+                {
+                    setStatus("That code is unavailable. Try another one.", "#b00020");
+                }
+                return;
+            }
+
+            if (parts[1] == "ERR" && parts.size() >= 3)
+            {
+                setStatus("NAT server error: " + QString::fromUtf8(parts[2]), "#b00020");
+                return;
+            }
+
+            QMessageBox::warning(this, "Configure P2P Code",
+                "Unexpected response from the NAT server.");
+        };
+
+        connect(btnCheck, &QPushButton::clicked, &dlg, runCheck);
+        connect(btnAccept, &QPushButton::clicked, &dlg, &QDialog::accept);
+        connect(btnCancel, &QPushButton::clicked, &dlg, &QDialog::reject);
+        connect(codeEdit, &QLineEdit::textChanged, &dlg, [&]() { resetAvailability(); });
+        connect(codeEdit, &QLineEdit::returnPressed, &dlg, runCheck);
+        layout->activate();
+        dlg.resize(std::max(dlg.sizeHint().width(), 380), dlg.sizeHint().height());
+        dlg.setFixedSize(dlg.size());
+        codeEdit->setFocus();
+
+        if (dlg.exec() != QDialog::Accepted)
+        {
+            return;
+        }
+
+        requested = approvedTarget;
+        if (requested.isEmpty())
+        {
+            continue;
+        }
+
+        QByteArray payload = QByteArray(kN02TraversalProtocol) + "|CLAIM|" + requested.toUtf8();
+        if (!ownerToken.isEmpty())
+        {
+            payload += "|" + ownerToken.toUtf8();
+        }
+
+        QList<QByteArray> parts;
+        QString error;
+        if (!sendTraversalRequest(payload, parts, error))
+        {
+            QMessageBox::warning(this, "Configure P2P Code", error);
+            return;
+        }
+
+        if (parts[1] == "CLAIMOK" && parts.size() >= 4)
+        {
+            const QString code = normalizeTraversalCode(QString::fromUtf8(parts[2]));
+            const QString token = QString::fromUtf8(parts[3]).trimmed();
+            if (code.isEmpty() || token.isEmpty())
+            {
+                QMessageBox::warning(this, "Configure P2P Code",
+                    "The NAT server returned an invalid code response.");
+                return;
+            }
+
+            CoreSettingsSetValue(SettingsID::Kaillera_P2PStaticCode, code.toStdString());
+            CoreSettingsSetValue(SettingsID::Kaillera_P2PStaticCodeOwnerToken, token.toStdString());
+            CoreSettingsSave();
+            refreshP2PStaticCodeDisplay();
+
+            if (!oldOwnerToken.isEmpty() && oldOwnerToken != token && (!oldCode.isEmpty() && oldCode != code))
+            {
+                releaseOldTraversalReservation(this, oldOwnerToken);
+            }
+
+            QMessageBox::information(this, "Configure P2P Code",
+                "Your connect code is now " + code + ".");
+            return;
+        }
+
+        if (parts[1] == "CLAIMSUGGEST" && parts.size() >= 4)
+        {
+            requested = normalizeTraversalCode(QString::fromUtf8(parts[3]));
+            QMessageBox::information(this, "Configure P2P Code",
+                "That code was taken before it could be claimed.\n"
+                "Suggested code: " + requested + "\n"
+                "Check availability again to accept it.");
+            continue;
+        }
+
+        if (parts[1] == "ERR" && parts.size() >= 3)
+        {
+            QMessageBox::warning(this, "Configure P2P Code",
+                "NAT server error: " + QString::fromUtf8(parts[2]));
+            return;
+        }
+
+        QMessageBox::warning(this, "Configure P2P Code",
+            "Unexpected response from the NAT server.");
+        return;
+    }
 }
 
 void KailleraNetplayDialog::onAddServer()
@@ -2435,11 +2966,18 @@ void KailleraNetplayDialog::onP2PHost()
     }
     QByteArray gameBytes = gameName.toUtf8();
 
-    int port = m_p2pPortEdit->text().toInt();
+    int port = CoreSettingsGetIntValue(SettingsID::Kaillera_Port);
     if (port <= 0 || port > 65535) port = 27886;
 
     if (p2p_core_initialize(true, port, APP, gameBytes.data(), usernameBytes.data()))
     {
+        const bool stateTimerWasRunning =
+            (m_stateMachineTimer != nullptr && m_stateMachineTimer->isActive());
+        if (stateTimerWasRunning)
+        {
+            m_stateMachineTimer->stop();
+        }
+
         hide();
 
         QString username = QString::fromUtf8(usernameBytes);
@@ -2450,7 +2988,13 @@ void KailleraNetplayDialog::onP2PHost()
         connect(&p2pDialog, &QDialog::finished, &loop, &QEventLoop::quit);
         loop.exec();
 
+        if (stateTimerWasRunning && m_stateMachineTimer != nullptr)
+        {
+            m_stateMachineTimer->start(1);
+        }
+
         show();
+        refreshP2PStaticCodeDisplay();
     }
     else
     {
@@ -2461,19 +3005,90 @@ void KailleraNetplayDialog::onP2PHost()
 // Check if a string looks like a NAT traversal code rather than an IP address.
 static bool looksLikeTraversalCode(const QString& s)
 {
-    if (s.isEmpty()) return false;
-    for (const QChar& ch : s)
+    QString text = s.trimmed().toUpper();
+    text.remove(' ');
+    if (text.isEmpty()) return false;
+    for (const QChar& ch : text)
     {
         if (ch == '.' || ch == ':' || ch == '/') return false;
     }
-    int alnumCount = 0;
-    for (const QChar& ch : s)
+    if (text.size() < 4) return false;
+
+    const QString prefix = text.left(3);
+    for (const QChar& ch : prefix)
     {
-        if (ch.isLetterOrNumber()) { alnumCount++; continue; }
-        if (ch == '-' || ch == '_') continue;
-        return false;
+        if (!ch.isLetter()) return false;
     }
-    return (alnumCount >= 6 && alnumCount <= 16);
+
+    QString digits = text.mid(3);
+    if (digits.startsWith('#') || digits.startsWith('-') || digits.startsWith('_'))
+        digits.remove(0, 1);
+    if (digits.isEmpty()) return false;
+    for (const QChar& ch : digits)
+    {
+        if (!ch.isDigit()) return false;
+    }
+    bool ok = false;
+    const int number = digits.toInt(&ok);
+    return ok && number >= 0;
+}
+
+static QString normalizeTraversalCode(const QString& s)
+{
+    QString text = s.trimmed().toUpper();
+    text.remove(' ');
+    if (!looksLikeTraversalCode(text)) return QString();
+
+    QString digits = text.mid(3);
+    if (digits.startsWith('#') || digits.startsWith('-') || digits.startsWith('_'))
+        digits.remove(0, 1);
+
+    bool ok = false;
+    const int number = digits.toInt(&ok);
+    if (!ok || number < 0) return QString();
+
+    const QString numberString = QString::number(number);
+    const QString normalizedDigits =
+        numberString.rightJustified(std::max(3, static_cast<int>(numberString.length())), '0');
+    return text.left(3) + "#" + normalizedDigits;
+}
+
+static QString normalizeTraversalClaimTarget(const QString& s)
+{
+    QString text = s.trimmed().toUpper();
+    text.remove(' ');
+    if (text.isEmpty()) return QString();
+    if (text == "AUTO") return text;
+
+    for (const QChar& ch : text)
+    {
+        if (ch == '.' || ch == ':' || ch == '/') return QString();
+    }
+
+    if (text.size() < 3) return QString();
+    const QString prefix = text.left(3);
+    for (const QChar& ch : prefix)
+    {
+        if (!ch.isLetter()) return QString();
+    }
+
+    QString suffix = text.mid(3);
+    if (suffix.isEmpty()) return prefix;
+    if (suffix.startsWith('#') || suffix.startsWith('-') || suffix.startsWith('_'))
+        suffix.remove(0, 1);
+    if (suffix.isEmpty()) return prefix;
+
+    for (const QChar& ch : suffix)
+    {
+        if (!ch.isDigit()) return QString();
+    }
+
+    bool ok = false;
+    const int number = suffix.toInt(&ok);
+    if (!ok || number < 0) return QString();
+
+    const QString digits = QString::number(number).rightJustified(std::max(3, static_cast<int>(QString::number(number).length())), '0');
+    return prefix + "#" + digits;
 }
 
 void KailleraNetplayDialog::onP2PJoin()
@@ -2490,26 +3105,40 @@ void KailleraNetplayDialog::onP2PJoin()
     if (usernameBytes.isEmpty()) usernameBytes = "Player";
 
     bool isCode = looksLikeTraversalCode(addrText);
+    const QString normalizedCode = isCode ? normalizeTraversalCode(addrText) : QString();
 
     if (p2p_core_initialize(false, 0, APP, (char*)"", usernameBytes.data()))
     {
+        const bool stateTimerWasRunning =
+            (m_stateMachineTimer != nullptr && m_stateMachineTimer->isActive());
+        if (stateTimerWasRunning)
+        {
+            m_stateMachineTimer->stop();
+        }
+
         if (isCode)
         {
             // Join by traversal code — the dialog handles connecting via NAT traversal
-            rememberP2PStoredEntry(addrText);
+            rememberP2PStoredEntry(normalizedCode);
             hide();
 
             QString username = QString::fromUtf8(usernameBytes);
-            KailleraP2PDialog p2pDialog(false, QString(), username, addrText, nullptr);
+            KailleraP2PDialog p2pDialog(false, QString(), username, normalizedCode, nullptr);
             connect(&p2pDialog, &KailleraP2PDialog::peerNicknameResolved, this,
-                [this, addrText](const QString& nickname) {
-                    updateP2PStoredNickname(addrText, nickname);
-                });
+                    [this, normalizedCode](const QString& nickname) {
+                        updateP2PStoredNickname(normalizedCode, nickname);
+                    },
+                    Qt::QueuedConnection);
             p2pDialog.show();
 
             QEventLoop loop;
             connect(&p2pDialog, &QDialog::finished, &loop, &QEventLoop::quit);
             loop.exec();
+
+            if (stateTimerWasRunning && m_stateMachineTimer != nullptr)
+            {
+                m_stateMachineTimer->start(1);
+            }
 
             show();
         }
@@ -2538,20 +3167,30 @@ void KailleraNetplayDialog::onP2PJoin()
                 QString username = QString::fromUtf8(usernameBytes);
                 KailleraP2PDialog p2pDialog(false, QString(), username, QString(), nullptr);
                 connect(&p2pDialog, &KailleraP2PDialog::peerNicknameResolved, this,
-                    [this, addrText](const QString& nickname) {
-                        updateP2PStoredNickname(addrText, nickname);
-                    });
+                        [this, addrText](const QString& nickname) {
+                            updateP2PStoredNickname(addrText, nickname);
+                        },
+                        Qt::QueuedConnection);
                 p2pDialog.show();
 
                 QEventLoop loop;
                 connect(&p2pDialog, &QDialog::finished, &loop, &QEventLoop::quit);
                 loop.exec();
 
+                if (stateTimerWasRunning && m_stateMachineTimer != nullptr)
+                {
+                    m_stateMachineTimer->start(1);
+                }
+
                 show();
             }
             else
             {
                 p2p_core_cleanup();
+                if (stateTimerWasRunning && m_stateMachineTimer != nullptr)
+                {
+                    m_stateMachineTimer->start(1);
+                }
                 QMessageBox::warning(this, "P2P Join", "Failed to connect to host: " + addrText);
             }
         }

@@ -60,6 +60,8 @@ private slots:
     void onP2PPasteAndGo();
     void onP2PWaitingGames();
     void onP2PStoredClicked(int row, int column);
+    void onCopyP2PCode();
+    void onConfigureP2PCode();
 
     // Network replies
     void onWaitingGamesReply(QNetworkReply* reply);
@@ -101,6 +103,9 @@ private:
     void toggleP2PStoredFavorite(int row);
     void rememberP2PStoredEntry(const QString& host, const QString& nickname = QString());
     void updateP2PStoredNickname(const QString& host, const QString& nickname);
+    void refreshP2PStaticCodeDisplay();
+    QString currentP2PStaticCode() const;
+    QString currentP2PStaticCodeOwnerToken() const;
 
     // State machine timer (replaces blocking KSSDFA loop)
     QTimer* m_stateMachineTimer = nullptr;
@@ -120,8 +125,10 @@ private:
     QPushButton* m_btnWaitingGames = nullptr;
 
     // P2P host controls
+    QLineEdit* m_p2pCurrentCodeEdit = nullptr;
+    QPushButton* m_btnP2PCopyCode = nullptr;
+    QPushButton* m_btnP2PConfigureCode = nullptr;
     QComboBox* m_p2pGameCombo = nullptr;
-    QLineEdit* m_p2pPortEdit = nullptr;
     QPushButton* m_btnP2PHost = nullptr;
 
     // P2P connect controls

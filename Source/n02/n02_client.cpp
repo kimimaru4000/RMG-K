@@ -303,7 +303,10 @@ static int gameCallbackWrapper(char *game, int player, int numplayers_arg) {
     }
 
     if (infos_copy.gameCallback)
-        return infos_copy.gameCallback(game, player, numplayers_arg);
+    {
+        const int result = infos_copy.gameCallback(game, player, numplayers_arg);
+        return result;
+    }
     return 0;
 }
 

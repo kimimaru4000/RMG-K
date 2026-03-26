@@ -647,6 +647,12 @@ void SettingsDialog::loadDirectorySettings(void)
 
 void SettingsDialog::load64DDSettings(void)
 {
+    int kailleraPort = CoreSettingsGetIntValue(SettingsID::Kaillera_Port);
+    if (kailleraPort < 1 || kailleraPort > 65535)
+    {
+        kailleraPort = 27886;
+    }
+
     QString recordsDirectoryRaw = QString::fromStdString(
         CoreSettingsGetStringValue(SettingsID::Kaillera_RecordsDirectory));
     if (recordsDirectoryRaw.isEmpty())
@@ -662,6 +668,7 @@ void SettingsDialog::load64DDSettings(void)
 
     this->kailleraRecordByDefaultCheckBox->setChecked(
         CoreSettingsGetBoolValue(SettingsID::Kaillera_RecordingEnabled));
+    this->kailleraPortSpinBox->setValue(kailleraPort);
     this->kailleraRecordsDirectoryLineEdit->setProperty("rawPath", recordsDirectoryRaw);
     this->kailleraRecordsDirectoryLineEdit->setText(getDisplayDirectoryPath(recordsDirectoryRaw));
     this->kailleraRecordsDirectoryLineEdit->setToolTip(this->kailleraRecordsDirectoryLineEdit->text());
@@ -900,6 +907,12 @@ void SettingsDialog::loadDefaultDirectorySettings(void)
 
 void SettingsDialog::loadDefault64DDSettings(void)
 {
+    int kailleraPort = CoreSettingsGetDefaultIntValue(SettingsID::Kaillera_Port);
+    if (kailleraPort < 1 || kailleraPort > 65535)
+    {
+        kailleraPort = 27886;
+    }
+
     QString recordsDirectoryRaw = QString::fromStdString(
         CoreSettingsGetDefaultStringValue(SettingsID::Kaillera_RecordsDirectory));
     if (recordsDirectoryRaw.isEmpty())
@@ -915,6 +928,7 @@ void SettingsDialog::loadDefault64DDSettings(void)
 
     this->kailleraRecordByDefaultCheckBox->setChecked(
         CoreSettingsGetDefaultBoolValue(SettingsID::Kaillera_RecordingEnabled));
+    this->kailleraPortSpinBox->setValue(kailleraPort);
     this->kailleraRecordsDirectoryLineEdit->setProperty("rawPath", recordsDirectoryRaw);
     this->kailleraRecordsDirectoryLineEdit->setText(getDisplayDirectoryPath(recordsDirectoryRaw));
     this->kailleraRecordsDirectoryLineEdit->setToolTip(this->kailleraRecordsDirectoryLineEdit->text());
@@ -1183,6 +1197,7 @@ void SettingsDialog::save64DDSettings(void)
     std::string recordsDirectory = recordsDirectoryRaw.toStdString();
 
     CoreSettingsSetValue(SettingsID::Kaillera_RecordingEnabled, this->kailleraRecordByDefaultCheckBox->isChecked());
+    CoreSettingsSetValue(SettingsID::Kaillera_Port, this->kailleraPortSpinBox->value());
     CoreSettingsSetValue(SettingsID::Kaillera_RecordsDirectory, recordsDirectory);
     CoreSettingsSetValue(SettingsID::Kaillera_RecordingCapEnabled, this->kailleraRecordingCapEnabledCheckBox->isChecked());
     CoreSettingsSetValue(SettingsID::Kaillera_RecordingCapMB, this->kailleraRecordingCapMBSpinBox->value());
