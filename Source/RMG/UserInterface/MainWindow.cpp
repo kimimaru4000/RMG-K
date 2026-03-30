@@ -3031,7 +3031,11 @@ bool MainWindow::handleNetplayChatKeyPress(QKeyEvent *event)
                 this->kailleraSessionManager->sendChatMessage(normalizedMessage);
 
                 const QString localNickname = QString::fromStdString(CoreSettingsGetStringValue(SettingsID::Kaillera_Username)).trimmed();
+#if defined(_WIN32)
                 const bool useImmediateLocalEcho = (n02::getActiveMode() != 1);
+#else
+                const bool useImmediateLocalEcho = true;
+#endif
                 if (useImmediateLocalEcho && !localNickname.isEmpty())
                 {
                     const auto now = std::chrono::steady_clock::now();
