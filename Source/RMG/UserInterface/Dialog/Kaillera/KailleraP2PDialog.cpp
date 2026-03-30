@@ -8,6 +8,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 #include "KailleraP2PDialog.hpp"
+#include "KailleraTraversalConfig.hpp"
 
 #ifdef _WIN32
 
@@ -27,16 +28,20 @@
 #include <QApplication>
 #include <QIcon>
 
+#include <algorithm>
 #include <cstring>
 
-static const char* kN02TraversalHost = "nat.smash64.net";
-static const int kN02TraversalPort = 6264;
 static const char* kSsrvHost = "kaillerareborn.2manygames.fr";
 static const int kSsrvPort = 27887;
 
 static QString timestamp()
 {
     return QDateTime::currentDateTime().toString("[h:mm AP] ");
+}
+
+static QString formatTraversalCode(const QString& prefix, int number)
+{
+    return prefix + "@" + QString::number(number);
 }
 
 static QIcon themedP2PIcon(const QString& iconName)
@@ -217,30 +222,50 @@ static QString buildP2PStyleSheet(const QString& theme)
 }
 
 // Check if a string looks like a NAT traversal code rather than an IP address.
-// Matches n02-rmg's LooksLikeTraversalCode().
+static QString normalizeTraversalCode(const QString& input)
+{
+    QString s = input.trimmed().toUpper();
+    s.remove(' ');
+    if (s.isEmpty()) return QString();
+
+    for (const QChar& ch : s)
+    {
+        if (ch == '.' || ch == ':' || ch == '/') return QString();
+    }
+
+    if (s.size() < 4) return QString();
+
+    int prefixLength = 0;
+    while (prefixLength < s.size() && prefixLength < 4 && s[prefixLength].isLetter())
+    {
+        ++prefixLength;
+    }
+    if (prefixLength < 3) return QString();
+    if (prefixLength < s.size() && s[prefixLength].isLetter()) return QString();
+
+    const QString prefix = s.left(prefixLength);
+    QString digits = s.mid(prefixLength);
+    if (digits.startsWith('@') || digits.startsWith('#') || digits.startsWith('-') || digits.startsWith('_'))
+        digits.remove(0, 1);
+    if (digits.isEmpty()) return QString();
+    if (digits.size() > 3) return QString();
+
+    for (const QChar& ch : digits)
+    {
+        if (!ch.isDigit()) return QString();
+    }
+
+    bool ok = false;
+    const int number = digits.toInt(&ok);
+    if (!ok || number < 0) return QString();
+
+    return formatTraversalCode(prefix, number);
+}
+
+// Matches n02-rmg's LooksLikeTraversalCode() intent, but accepts legacy separators and leading zeroes.
 static bool looksLikeTraversalCode(const QString& s)
 {
-    if (s.isEmpty()) return false;
-
-    // IP addresses and hostnames contain '.', ':', or '/'
-    for (const QChar& ch : s)
-    {
-        if (ch == '.' || ch == ':' || ch == '/') return false;
-    }
-
-    int alnumCount = 0;
-    for (const QChar& ch : s)
-    {
-        if (ch.isLetterOrNumber())
-        {
-            alnumCount++;
-            continue;
-        }
-        if (ch == '-' || ch == '_') continue;
-        return false;
-    }
-
-    return (alnumCount >= 6 && alnumCount <= 16);
+    return !normalizeTraversalCode(s).isEmpty();
 }
 
 // Try to extract an IPv4 address and optional port from a string.
@@ -323,12 +348,20 @@ KailleraP2PDialog::KailleraP2PDialog(bool isHost, const QString& gameName,
     m_travTimer->start(1000);
 
     travResetState();
+    travLoadIdentity();
 
     if (m_isHost)
     {
         // Host always uses NAT traversal (host by code)
         m_travHostEnabled = true;
-        travSendReg();
+        if (!m_travToken.isEmpty() && !m_travCode.isEmpty())
+        {
+            travSendHostOpen();
+        }
+        else
+        {
+            travSendClaimAuto();
+        }
         m_travNextRegMs = QDateTime::currentMSecsSinceEpoch() + 2000;
         updateHostCodeUI();
 
@@ -340,7 +373,7 @@ KailleraP2PDialog::KailleraP2PDialog(bool isHost, const QString& gameName,
     {
         // Join by traversal code
         m_travJoinEnabled = true;
-        m_travJoinCode = joinCode;
+        m_travJoinCode = normalizeTraversalCode(joinCode);
         qint64 now = QDateTime::currentMSecsSinceEpoch();
         travSendJoin();
         m_travNextJoinMs = now + 3000;
@@ -524,18 +557,30 @@ void KailleraP2PDialog::setupUI()
 void KailleraP2PDialog::connectSignals()
 {
     auto& bridge = KailleraUIBridge::instance();
+    constexpr Qt::ConnectionType kUiCallbackConnection = Qt::QueuedConnection;
 
-    connect(&bridge, &KailleraUIBridge::p2pChatReceived, this, &KailleraP2PDialog::onChatReceived);
-    connect(&bridge, &KailleraUIBridge::p2pGameStarted, this, &KailleraP2PDialog::onGameStarted);
-    connect(&bridge, &KailleraUIBridge::p2pGameEnded, this, &KailleraP2PDialog::onGameEnded);
-    connect(&bridge, &KailleraUIBridge::p2pClientDropped, this, &KailleraP2PDialog::onClientDropped);
-    connect(&bridge, &KailleraUIBridge::p2pDebugMessage, this, &KailleraP2PDialog::onDebug);
-    connect(&bridge, &KailleraUIBridge::p2pPingUpdated, this, &KailleraP2PDialog::onPingUpdated);
-    connect(&bridge, &KailleraUIBridge::p2pPeerJoined, this, &KailleraP2PDialog::onPeerJoined);
-    connect(&bridge, &KailleraUIBridge::p2pPeerLeft, this, &KailleraP2PDialog::onPeerLeft);
-    connect(&bridge, &KailleraUIBridge::p2pPeerInfo, this, &KailleraP2PDialog::onPeerInfo);
-    connect(&bridge, &KailleraUIBridge::p2pFodippResult, this, &KailleraP2PDialog::onFodippResult);
-    connect(&bridge, &KailleraUIBridge::p2pSsrvPacketReceived, this, &KailleraP2PDialog::onSsrvPacketReceived);
+    connect(&bridge, &KailleraUIBridge::p2pChatReceived, this, &KailleraP2PDialog::onChatReceived,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pGameStarted, this, &KailleraP2PDialog::onGameStarted,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pGameEnded, this, &KailleraP2PDialog::onGameEnded,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pClientDropped, this, &KailleraP2PDialog::onClientDropped,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pDebugMessage, this, &KailleraP2PDialog::onDebug,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pPingUpdated, this, &KailleraP2PDialog::onPingUpdated,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pPeerJoined, this, &KailleraP2PDialog::onPeerJoined,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pPeerLeft, this, &KailleraP2PDialog::onPeerLeft,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pPeerInfo, this, &KailleraP2PDialog::onPeerInfo,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pFodippResult, this, &KailleraP2PDialog::onFodippResult,
+            kUiCallbackConnection);
+    connect(&bridge, &KailleraUIBridge::p2pSsrvPacketReceived, this, &KailleraP2PDialog::onSsrvPacketReceived,
+            kUiCallbackConnection);
 }
 
 void KailleraP2PDialog::reject()
@@ -550,7 +595,7 @@ void KailleraP2PDialog::reject()
         unenlistGame();
 
     if (m_isHost && m_travHostEnabled)
-        travSendClose();
+        travSendHostClose();
 
     p2p_disconnect();
     p2p_core_cleanup();
@@ -564,13 +609,12 @@ void KailleraP2PDialog::travResetState()
 {
     m_travHostEnabled = false;
     m_travJoinEnabled = false;
-    m_travCode.clear();
-    m_travToken.clear();
+    m_travLiveToken.clear();
     m_travRegAttempts = 0;
+    m_travHostSessionSuspended = false;
     m_travHostFallbackActive = false;
     m_travHostIpPending = false;
     m_travHostIpPort.clear();
-    m_travHostRegSuspended = false;
     m_travNextRegMs = 0;
     m_travNextKeepMs = 0;
     m_travNextJoinMs = 0;
@@ -592,6 +636,43 @@ void KailleraP2PDialog::travResetState()
     m_ssrvCopyMyIpPending = false;
 }
 
+void KailleraP2PDialog::travLoadIdentity()
+{
+    const QString storedCode =
+        normalizeTraversalCode(QString::fromStdString(CoreSettingsGetStringValue(SettingsID::Kaillera_P2PStaticCode)));
+    const QString storedToken =
+        QString::fromStdString(CoreSettingsGetStringValue(SettingsID::Kaillera_P2PStaticCodeOwnerToken)).trimmed();
+
+    if (!storedCode.isEmpty() && !storedToken.isEmpty())
+    {
+        m_travCode = storedCode;
+        m_travToken = storedToken;
+    }
+    else
+    {
+        m_travCode.clear();
+        m_travToken.clear();
+    }
+}
+
+void KailleraP2PDialog::travSaveIdentity() const
+{
+    CoreSettingsSetValue(SettingsID::Kaillera_P2PStaticCode, m_travCode.toStdString());
+    CoreSettingsSetValue(SettingsID::Kaillera_P2PStaticCodeOwnerToken, m_travToken.toStdString());
+    CoreSettingsSave();
+}
+
+void KailleraP2PDialog::travClearIdentity()
+{
+    m_travCode.clear();
+    m_travToken.clear();
+    m_travLiveToken.clear();
+
+    CoreSettingsSetValue(SettingsID::Kaillera_P2PStaticCode, std::string(""));
+    CoreSettingsSetValue(SettingsID::Kaillera_P2PStaticCodeOwnerToken, std::string(""));
+    CoreSettingsSave();
+}
+
 void KailleraP2PDialog::travSendToServer(const QByteArray& msg)
 {
     if (msg.isEmpty()) return;
@@ -600,33 +681,46 @@ void KailleraP2PDialog::travSendToServer(const QByteArray& msg)
                          const_cast<char*>(kN02TraversalHost), kN02TraversalPort);
 }
 
-void KailleraP2PDialog::travSendReg()
+void KailleraP2PDialog::travSendClaimAuto()
 {
-    QByteArray msg = QByteArray("N02TRAV1|REG|") +
-                     QByteArray::number((quint32)GetTickCount());
+    QByteArray msg = QByteArray(kN02TraversalProtocol) + "|CLAIM|AUTO";
     travSendToServer(msg);
     if (m_travHostEnabled)
         m_travRegAttempts++;
 }
 
-void KailleraP2PDialog::travSendKeep()
+void KailleraP2PDialog::travSendClaimAck()
 {
     if (m_travToken.isEmpty()) return;
-    QByteArray msg = QByteArray("N02TRAV1|KEEP|") + m_travToken.toUtf8();
+    QByteArray msg = QByteArray(kN02TraversalProtocol) + "|CLAIMACK|" + m_travToken.toUtf8();
     travSendToServer(msg);
 }
 
-void KailleraP2PDialog::travSendClose()
+void KailleraP2PDialog::travSendHostOpen()
 {
     if (m_travToken.isEmpty()) return;
-    QByteArray msg = QByteArray("N02TRAV1|CLOSE|") + m_travToken.toUtf8();
+    QByteArray msg = QByteArray(kN02TraversalProtocol) + "|HOSTOPEN|" + m_travToken.toUtf8();
+    travSendToServer(msg);
+}
+
+void KailleraP2PDialog::travSendHostKeep()
+{
+    if (m_travToken.isEmpty()) return;
+    QByteArray msg = QByteArray(kN02TraversalProtocol) + "|HOSTKEEP|" + m_travToken.toUtf8();
+    travSendToServer(msg);
+}
+
+void KailleraP2PDialog::travSendHostClose()
+{
+    if (m_travToken.isEmpty()) return;
+    QByteArray msg = QByteArray(kN02TraversalProtocol) + "|HOSTCLOSE|" + m_travToken.toUtf8();
     travSendToServer(msg);
 }
 
 void KailleraP2PDialog::travSendJoin()
 {
     if (m_travJoinCode.isEmpty()) return;
-    QByteArray msg = QByteArray("N02TRAV1|JOIN|") +
+    QByteArray msg = QByteArray(kN02TraversalProtocol) + "|JOIN|" +
                      m_travJoinCode.toUtf8() + "|" +
                      QByteArray::number((quint32)GetTickCount());
     travSendToServer(msg);
@@ -636,7 +730,7 @@ void KailleraP2PDialog::travPunchEndpoint(const QString& hostIp, int hostPort, c
 {
     if (hostIp.isEmpty() || hostPort <= 0) return;
 
-    QByteArray msg = QByteArray("N02TRAV1|PUNCH|") + token.toUtf8();
+    QByteArray msg = QByteArray(kN02TraversalProtocol) + "|PUNCH|" + token.toUtf8();
     QByteArray ipBytes = hostIp.toUtf8();
 
     // Send 10 punch packets to open NAT mappings
@@ -686,8 +780,7 @@ void KailleraP2PDialog::updateHostCodeUI()
     if (!m_isHost || !m_connectCodeEdit) return;
 
     if (m_hostGroup) m_hostGroup->setVisible(true);
-
-    const bool codeActive = !m_travHostRegSuspended;
+    const bool codeActive = !m_travHostSessionSuspended;
     if (m_connectCodeEdit) m_connectCodeEdit->setEnabled(codeActive);
     if (m_copyAction) m_copyAction->setEnabled(codeActive);
     if (m_enlistCheck) m_enlistCheck->setEnabled(codeActive);
@@ -784,8 +877,9 @@ void KailleraP2PDialog::onSsrvPacketReceived(QByteArray cmd, QByteArray saddr)
 
     const char* cmdStr = cmdBuf.constData();
 
-    // ---- NAT traversal (N02TRAV1) ----
-    if (strncmp(cmdStr, "N02TRAV1|", 9) == 0)
+    // ---- NAT traversal ----
+    const QByteArray traversalPrefix = QByteArray(kN02TraversalProtocol) + "|";
+    if (strncmp(cmdStr, traversalPrefix.constData(), traversalPrefix.size()) == 0)
     {
         // Split the message by '|'
         QByteArray parseBuf = cmdBuf;
@@ -804,19 +898,20 @@ void KailleraP2PDialog::onSsrvPacketReceived(QByteArray cmd, QByteArray saddr)
         if (partCount < 2) return;
         const char* type = parts[1];
 
-        // REGOK: Registration succeeded — we got a traversal code.
-        if (strcmp(type, "REGOK") == 0 && partCount >= 6)
+        if (strcmp(type, "CLAIMOK") == 0 && partCount >= 4)
         {
             if (!m_travHostEnabled) return;
 
-            m_travCode = QString::fromUtf8(parts[2]);
+            m_travCode = normalizeTraversalCode(QString::fromUtf8(parts[2]));
             m_travToken = QString::fromUtf8(parts[3]);
+            m_travLiveToken.clear();
             m_travRegAttempts = 0;
             m_travHostIpPending = false;
             m_travHostIpPort.clear();
+            travSaveIdentity();
 
             m_chat->append("<span style='color:green;'>" + timestamp() +
-                           "Received connect code: " + m_travCode.toHtmlEscaped() + "</span>");
+                           "Claimed connect code: " + m_travCode.toHtmlEscaped() + "</span>");
 
             // Auto-copy to clipboard
             QApplication::clipboard()->setText(m_travCode);
@@ -824,11 +919,38 @@ void KailleraP2PDialog::onSsrvPacketReceived(QByteArray cmd, QByteArray saddr)
                            "Copied connect code to clipboard</span>");
 
             updateHostCodeUI();
+            travSendClaimAck();
+            travSendHostOpen();
 
-            // Start keepalive cadence
+            return;
+        }
+
+        if (strcmp(type, "CLAIMSUGGEST") == 0 && partCount >= 4)
+        {
+            m_chat->append("<span style='color:green;'>" + timestamp() +
+                           "Requested code " + QString::fromUtf8(parts[2]).toHtmlEscaped() +
+                           " is unavailable. Suggested: " +
+                           QString::fromUtf8(parts[3]).toHtmlEscaped() + "</span>");
+            return;
+        }
+
+        if (strcmp(type, "HOSTOK") == 0 && partCount >= 6)
+        {
+            if (!m_travHostEnabled) return;
+
+            m_travCode = normalizeTraversalCode(QString::fromUtf8(parts[2]));
+            m_travLiveToken = QString::fromUtf8(parts[3]);
+            m_travRegAttempts = 0;
+            m_travHostIpPending = false;
+            m_travHostIpPort.clear();
+            m_travNextRegMs = 0;
             m_travNextKeepMs = 0;
+            travSaveIdentity();
+            updateHostCodeUI();
 
-            // Enlist on public game list if checkbox is checked
+            m_chat->append("<span style='color:green;'>" + timestamp() +
+                           "Host session opened for " + m_travCode.toHtmlEscaped() + "</span>");
+
             if (m_enlistCheck && m_enlistCheck->isChecked())
                 enlistGame();
 
@@ -886,7 +1008,7 @@ void KailleraP2PDialog::onSsrvPacketReceived(QByteArray cmd, QByteArray saddr)
             QString peerIp = QString::fromUtf8(parts[3]);
             int peerPort = atoi(parts[4]);
 
-            if (!m_travToken.isEmpty() && token != m_travToken) return;
+            if (!m_travLiveToken.isEmpty() && token != m_travLiveToken) return;
 
             m_chat->append("<span style='color:green;'>" + timestamp() +
                            "NAT traversal: peer " + peerIp + ":" + QString::number(peerPort) + "</span>");
@@ -903,6 +1025,8 @@ void KailleraP2PDialog::onSsrvPacketReceived(QByteArray cmd, QByteArray saddr)
         // ERR: Server error
         if (strcmp(type, "ERR") == 0 && partCount >= 3)
         {
+            const QString reason = QString::fromUtf8(parts[2]);
+
             if (m_travJoinEnabled && strcmp(parts[2], "BUSY") == 0)
             {
                 m_travJoinBusy = true;
@@ -910,8 +1034,36 @@ void KailleraP2PDialog::onSsrvPacketReceived(QByteArray cmd, QByteArray saddr)
                 m_travNextJoinMs = 0;
                 return;
             }
+
+            if (m_travJoinEnabled && (strcmp(parts[2], "OFFLINE") == 0 || strcmp(parts[2], "UNKNOWNCODE") == 0))
+            {
+                m_travJoinEnabled = false;
+                m_travJoinDeadlineMs = 0;
+                m_travNextJoinMs = 0;
+            }
+
+            if (m_travHostEnabled && strcmp(parts[2], "NOAUTH") == 0)
+            {
+                m_chat->append("<span style='color:green;'>" + timestamp() +
+                               "Saved connect code identity was rejected. Claiming a new code.</span>");
+                travClearIdentity();
+                m_travRegAttempts = 0;
+                m_travNextRegMs = 0;
+                m_travNextKeepMs = 0;
+                m_travHostIpPending = false;
+                updateHostCodeUI();
+                return;
+            }
+
+            if (m_travHostEnabled && strcmp(parts[2], "NOSESSION") == 0)
+            {
+                m_travLiveToken.clear();
+                m_travNextRegMs = 0;
+                m_travNextKeepMs = 0;
+            }
+
             m_chat->append("<span style='color:green;'>" + timestamp() +
-                           "NAT traversal error: " + QString::fromUtf8(parts[2]).toHtmlEscaped() + "</span>");
+                           "NAT traversal error: " + reason.toHtmlEscaped() + "</span>");
             return;
         }
 
@@ -1004,19 +1156,22 @@ void KailleraP2PDialog::onPingUpdated(int ping)
 void KailleraP2PDialog::onPeerJoined()
 {
     m_chat->append("<span style='color:green;'>" + timestamp() + "Peer connected.</span>");
+    m_travHostPeerIp.clear();
+    m_travHostPeerPort = 0;
+    m_travHostPeerDeadlineMs = 0;
+    m_travNextHostPunchMs = 0;
 
-    // If hosting by code, release the code once the peer connects.
-    if (m_isHost && m_travHostEnabled && !m_travHostRegSuspended)
+    if (m_isHost && m_travHostEnabled)
     {
-        travSendClose();
-
-        m_travHostRegSuspended = true;
-        m_travCode.clear();
-        m_travToken.clear();
-        m_travRegAttempts = 0;
+        m_travHostSessionSuspended = true;
         m_travNextRegMs = 0;
         m_travNextKeepMs = 0;
-        updateHostCodeUI();
+
+        if (!m_travLiveToken.isEmpty())
+        {
+            travSendHostClose();
+            m_travLiveToken.clear();
+        }
     }
 
     // Remove from public game list while peer is connected
@@ -1030,23 +1185,18 @@ void KailleraP2PDialog::onPeerLeft()
     m_ready = false;
     if (m_btnReady) m_btnReady->setChecked(false);
 
-    // If hosting by code, resume registration to mint a fresh code.
-    if (m_isHost && m_travHostEnabled)
-    {
-        m_travHostRegSuspended = false;
-        m_travCode.clear();
-        m_travToken.clear();
-        m_travRegAttempts = 0;
-        m_travNextRegMs = 0;
-        m_travNextKeepMs = 0;
-        updateHostCodeUI();
-    }
-
     // Clear peer punching state (always, regardless of trav mode)
     m_travHostPeerIp.clear();
     m_travHostPeerPort = 0;
     m_travHostPeerDeadlineMs = 0;
     m_travNextHostPunchMs = 0;
+
+    if (m_isHost && m_travHostEnabled)
+    {
+        m_travHostSessionSuspended = false;
+        m_travNextRegMs = 0;
+        m_travNextKeepMs = 0;
+    }
 
     // Re-enlist on public game list now that we're waiting for a new peer
     if (m_isHost && m_enlistCheck && m_enlistCheck->isChecked())
@@ -1165,45 +1315,50 @@ void KailleraP2PDialog::onTravTimer()
     // ---- HOST: NAT traversal registration & keepalive ----
     if (m_isHost && m_travHostEnabled)
     {
-        if (!m_travHostRegSuspended)
+        if (m_travHostSessionSuspended)
         {
-            if (m_travToken.isEmpty())
+            // Keep the static code identity locally, but do not advertise or keep
+            // a live host session open while a peer is connected.
+        }
+        else if (m_travToken.isEmpty() || m_travCode.isEmpty())
+        {
+            if (m_travNextRegMs == 0 || now >= m_travNextRegMs)
             {
-                // No token yet — keep retrying registration until REGOK
-                if (m_travNextRegMs == 0 || now >= m_travNextRegMs)
+                if (m_travRegAttempts >= 4)
                 {
-                    if (m_travRegAttempts >= 4)
-                    {
-                        // Fallback to IP-based hosting
-                        m_travHostEnabled = false;
-                        m_travHostFallbackActive = true;
-                        m_travNextRegMs = 0;
-                        m_travNextKeepMs = 0;
-                        m_travHostIpPending = true;
-                        m_travHostIpPort.clear();
-                        updateHostCodeUI();
+                    // Fallback to IP-based hosting
+                    m_travHostEnabled = false;
+                    m_travHostFallbackActive = true;
+                    m_travNextRegMs = 0;
+                    m_travNextKeepMs = 0;
+                    m_travHostIpPending = true;
+                    m_travHostIpPort.clear();
+                    updateHostCodeUI();
 
-                        m_chat->append("<span style='color:green;'>" + timestamp() +
-                                       "Unable to contact NAT server, hosting by IP. "
-                                       "You may need to manually port forward.</span>");
-                        ssrvWhatIsMyIp();
-                    }
-                    else
-                    {
-                        travSendReg();
-                        m_travNextRegMs = now + 2000;
-                    }
+                    m_chat->append("<span style='color:red;'>" + timestamp() +
+                                   "Failed to get a connect code from the NAT server. "
+                                   "Hosting by IP instead. You may need to manually port forward.</span>");
+                    ssrvWhatIsMyIp();
                 }
-            }
-            else
-            {
-                // Have token — send keepalive
-                if (m_travNextKeepMs == 0 || now >= m_travNextKeepMs)
+                else
                 {
-                    travSendKeep();
-                    m_travNextKeepMs = now + 10000;
+                    travSendClaimAuto();
+                    m_travNextRegMs = now + 2000;
                 }
             }
+        }
+        else if (m_travLiveToken.isEmpty())
+        {
+            if (m_travNextRegMs == 0 || now >= m_travNextRegMs)
+            {
+                travSendHostOpen();
+                m_travNextRegMs = now + 2000;
+            }
+        }
+        else if (m_travNextKeepMs == 0 || now >= m_travNextKeepMs)
+        {
+            travSendHostKeep();
+            m_travNextKeepMs = now + 10000;
         }
 
         // While waiting for the peer's LOGN_REQ, keep punching their endpoint
@@ -1215,7 +1370,7 @@ void KailleraP2PDialog::onTravTimer()
         {
             if (m_travNextHostPunchMs == 0 || now >= m_travNextHostPunchMs)
             {
-                travPunchEndpoint(m_travHostPeerIp, m_travHostPeerPort, m_travToken);
+                travPunchEndpoint(m_travHostPeerIp, m_travHostPeerPort, m_travLiveToken);
                 m_travNextHostPunchMs = now + 1000;
             }
         }

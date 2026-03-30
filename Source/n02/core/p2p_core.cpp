@@ -683,7 +683,6 @@ void p2p_step(){
 									P2PCORE.CONNECTED = true;
 									P2PCORE.last_ping_echo_time = p2p_GetTime();
 
-									
 									p2p_hosted_game_callback(P2PCORE.GAME);
 									/*
 									char xxx[800];
