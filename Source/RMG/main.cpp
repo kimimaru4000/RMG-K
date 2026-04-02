@@ -8,6 +8,7 @@
  *  along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 #include <UserInterface/MainWindow.hpp>
+#include <Utilities/KailleraExport/KrecMp4Export.hpp>
 
 #include <QCommandLineParser>
 #include <QApplication>
@@ -186,8 +187,6 @@ int main(int argc, char **argv)
 
     QApplication app(argc, argv);
 
-    UserInterface::MainWindow window;
-
 #ifdef PORTABLE_INSTALL
     // only change current directory
     // when we're in portable directory mode
@@ -222,6 +221,16 @@ int main(int argc, char **argv)
     QCommandLineOption quitAfterEmulationOption({"q", "quit-after-emulation"}, "Quits RMG when emulation has finished");
     QCommandLineOption loadStateSlot("load-state-slot", "Loads save state slot when launching the ROM", "Slot Number");
     QCommandLineOption diskOption("disk", "64DD Disk to open ROM in combination with", "64DD Disk");
+    QCommandLineOption exportKrecOption("export-krec", "Internal replay export mode: input .krec file", "path");
+    QCommandLineOption exportRomOption("export-rom", "Internal replay export mode: input ROM file", "path");
+    QCommandLineOption exportOutputOption("export-output", "Internal replay export mode: output MP4 file", "path");
+    QCommandLineOption exportFfmpegOption("export-ffmpeg", "Internal replay export mode: FFmpeg executable", "path");
+    QCommandLineOption exportVerboseOption("export-verbose", "Internal replay export mode: verbose export logging");
+    exportKrecOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    exportRomOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    exportOutputOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    exportFfmpegOption.setFlags(QCommandLineOption::HiddenFromHelp);
+    exportVerboseOption.setFlags(QCommandLineOption::HiddenFromHelp);
 
 #ifndef PORTABLE_INSTALL
     parser.addOption(libPathOption);
@@ -235,6 +244,11 @@ int main(int argc, char **argv)
     parser.addOption(quitAfterEmulationOption);
     parser.addOption(loadStateSlot);
     parser.addOption(diskOption);
+    parser.addOption(exportKrecOption);
+    parser.addOption(exportRomOption);
+    parser.addOption(exportOutputOption);
+    parser.addOption(exportFfmpegOption);
+    parser.addOption(exportVerboseOption);
     parser.addPositionalArgument("ROM", "ROM to open");
 
     // parse arguments
@@ -263,6 +277,13 @@ int main(int argc, char **argv)
         CoreSetSharedDataPathOverride(sharedDataPathOverride.toStdString());
     }
 #endif // PORTABLE_INSTALL
+
+    if (KailleraExport::IsReplayExportRequested(parser))
+    {
+        return KailleraExport::RunReplayExportFromCommandLine(parser);
+    }
+
+    UserInterface::MainWindow window;
 
     // print debug callbacks to stdout if needed
     CoreSetPrintDebugCallback(parser.isSet(debugMessagesOption));

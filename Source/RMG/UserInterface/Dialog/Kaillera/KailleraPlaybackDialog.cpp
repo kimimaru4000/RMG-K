@@ -9,6 +9,8 @@
  */
 #include "KailleraPlaybackDialog.hpp"
 #include "KailleraTableStyle.hpp"
+#include "UserInterface/MainWindow.hpp"
+#include "Utilities/KailleraExport/KrecParser.hpp"
 
 #ifdef _WIN32
 
@@ -25,7 +27,10 @@
 #include <QUrl>
 #include <QDir>
 #include <QFileInfo>
+#include <QFileDialog>
+#include <QCoreApplication>
 
+#include <algorithm>
 #include <cstring>
 #include <ctime>
 #include <fstream>
@@ -33,6 +38,40 @@
 static QString getKailleraRecordsDirectory()
 {
     return QString::fromStdString(CoreGetKailleraRecordsDirectory());
+}
+
+static QString ensureMp4Extension(QString path)
+{
+    if (!path.endsWith(".mp4", Qt::CaseInsensitive))
+    {
+        path += ".mp4";
+    }
+    return path;
+}
+
+static QString summarizeExportLog(const QString& log)
+{
+    QString normalizedLog = log;
+    normalizedLog.replace('\r', '\n');
+
+    const QStringList lines = normalizedLog.split('\n', Qt::SkipEmptyParts);
+    QString latestLine;
+    if (!lines.isEmpty())
+    {
+        latestLine = lines.last().trimmed();
+    }
+
+    if (latestLine.length() > 160)
+    {
+        latestLine = latestLine.left(157) + "...";
+    }
+
+    if (latestLine.isEmpty())
+    {
+        return "Exporting recording to MP4...\n\nThis may take a while.";
+    }
+
+    return "Exporting recording to MP4...\n\n" + latestLine;
 }
 
 KailleraPlaybackDialog::KailleraPlaybackDialog(QWidget* parent)
@@ -52,6 +91,13 @@ KailleraPlaybackDialog::~KailleraPlaybackDialog()
     if (m_playbackTimer)
     {
         m_playbackTimer->stop();
+    }
+
+    if (m_exportProcess != nullptr)
+    {
+        m_exportProcess->disconnect(this);
+        m_exportProcess->kill();
+        m_exportProcess->waitForFinished(1000);
     }
 }
 
@@ -94,6 +140,7 @@ void KailleraPlaybackDialog::setupUI()
     m_btnStop = new QPushButton("Stop", this);
     m_btnPBDelete = new QPushButton("Delete", this);
     m_btnPBRefresh = new QPushButton("Refresh", this);
+    m_btnExport = new QPushButton("Export MP4", this);
     m_btnOpenFolder = new QPushButton("Open Folder", this);
 
     connect(m_btnPlay, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackPlay);
@@ -102,6 +149,7 @@ void KailleraPlaybackDialog::setupUI()
     connect(m_btnStop, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackStop);
     connect(m_btnPBDelete, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackDelete);
     connect(m_btnPBRefresh, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackRefresh);
+    connect(m_btnExport, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackExport);
     connect(m_btnOpenFolder, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackOpenFolder);
 
     btnLayout->addWidget(m_btnPlay);
@@ -110,6 +158,7 @@ void KailleraPlaybackDialog::setupUI()
     btnLayout->addWidget(m_btnStop);
     btnLayout->addWidget(m_btnPBDelete);
     btnLayout->addWidget(m_btnPBRefresh);
+    btnLayout->addWidget(m_btnExport);
     btnLayout->addStretch();
     btnLayout->addWidget(m_btnOpenFolder);
     mainLayout->addLayout(btnLayout);
@@ -404,6 +453,133 @@ void KailleraPlaybackDialog::populatePlaybackList()
     m_playbackTable->sortByColumn(0, Qt::DescendingOrder);
 }
 
+QString KailleraPlaybackDialog::getSelectedRecordingPath() const
+{
+    if (m_playbackTable == nullptr)
+    {
+        return {};
+    }
+
+    const int row = m_playbackTable->currentRow();
+    if (row < 0)
+    {
+        return {};
+    }
+
+    QTableWidgetItem* fileNameItem = m_playbackTable->item(row, 5);
+    if (fileNameItem == nullptr)
+    {
+        return {};
+    }
+
+    return QDir(getKailleraRecordsDirectory()).filePath(fileNameItem->text());
+}
+
+QString KailleraPlaybackDialog::getSelectedRecordingGameName(QString* recordingPath) const
+{
+    const QString selectedPath = getSelectedRecordingPath();
+    if (recordingPath != nullptr)
+    {
+        *recordingPath = selectedPath;
+    }
+
+    if (selectedPath.isEmpty())
+    {
+        return {};
+    }
+
+    KailleraExport::KrecData krecData;
+    std::string errorMessage;
+    if (!KailleraExport::ParseKrecFile(std::filesystem::path(selectedPath.toStdString()), krecData, &errorMessage))
+    {
+        return {};
+    }
+
+    return QString::fromStdString(krecData.header.gameName);
+}
+
+void KailleraPlaybackDialog::resetExportUi()
+{
+    if (m_btnExport != nullptr)
+    {
+        m_btnExport->setEnabled(true);
+    }
+
+    if (m_exportProgressDialog != nullptr)
+    {
+        m_exportProgressDialog->close();
+        m_exportProgressDialog->deleteLater();
+        m_exportProgressDialog = nullptr;
+    }
+
+    if (m_exportProcess != nullptr)
+    {
+        m_exportProcess->deleteLater();
+        m_exportProcess = nullptr;
+    }
+}
+
+void KailleraPlaybackDialog::startExportProcess(const QString& recordingPath,
+                                                const QString& romPath,
+                                                const QString& outputPath)
+{
+    if (m_exportProcess != nullptr)
+    {
+        return;
+    }
+
+    m_exportCanceled = false;
+    m_exportLog.clear();
+    m_exportOutputPath = outputPath;
+
+    m_exportProcess = new QProcess(this);
+    m_exportProcess->setProcessChannelMode(QProcess::MergedChannels);
+    m_exportProcess->setProgram(QCoreApplication::applicationFilePath());
+    m_exportProcess->setArguments({
+        "--export-krec", recordingPath,
+        "--export-rom", romPath,
+        "--export-output", outputPath
+    });
+
+    connect(m_exportProcess, &QProcess::readyRead, this, &KailleraPlaybackDialog::onExportProcessOutput);
+    connect(m_exportProcess,
+            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this,
+            &KailleraPlaybackDialog::onExportProcessFinished);
+
+    m_exportProgressDialog = new QProgressDialog("Exporting recording to MP4...", "Cancel", 0, 0, this);
+    m_exportProgressDialog->setWindowTitle("Export MP4");
+    m_exportProgressDialog->setWindowModality(Qt::WindowModal);
+    m_exportProgressDialog->setMinimumDuration(0);
+    m_exportProgressDialog->setAutoClose(false);
+    m_exportProgressDialog->setAutoReset(false);
+    m_exportProgressDialog->setMinimumWidth(520);
+    m_exportProgressDialog->setMaximumWidth(700);
+    connect(m_exportProgressDialog, &QProgressDialog::canceled, this, [this]() {
+        m_exportCanceled = true;
+        if (m_exportProcess != nullptr)
+        {
+            m_exportProcess->kill();
+        }
+    });
+
+    if (m_btnExport != nullptr)
+    {
+        m_btnExport->setEnabled(false);
+    }
+
+    m_exportProcess->start();
+    if (!m_exportProcess->waitForStarted())
+    {
+        const QString message = m_exportProcess->errorString();
+        resetExportUi();
+        QMessageBox::warning(this, "Export MP4", "Failed to start export process.\n\n" + message);
+        return;
+    }
+
+    m_exportProgressDialog->show();
+}
+
 void KailleraPlaybackDialog::onPlaybackPlay()
 {
     if (!m_playbackTable) return;
@@ -529,6 +705,124 @@ void KailleraPlaybackDialog::onPlaybackOpenFolder()
     const QString recordsPath = getKailleraRecordsDirectory();
     QDir().mkpath(recordsPath);
     QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(recordsPath).absolutePath()));
+}
+
+void KailleraPlaybackDialog::onPlaybackExport()
+{
+    if (m_exportProcess != nullptr)
+    {
+        return;
+    }
+
+    if (CoreIsEmulationRunning() || n02::isPlaybackActive())
+    {
+        QMessageBox::information(this,
+                                 "Export MP4",
+                                 "Stop playback before exporting a recording.");
+        return;
+    }
+
+    QString recordingPath;
+    const QString gameName = getSelectedRecordingGameName(&recordingPath);
+    if (recordingPath.isEmpty())
+    {
+        QMessageBox::information(this, "Export MP4", "Select a recording to export first.");
+        return;
+    }
+
+    if (gameName.isEmpty())
+    {
+        QMessageBox::warning(this, "Export MP4", "Failed to read the selected recording.");
+        return;
+    }
+
+    auto* mainWindow = qobject_cast<UserInterface::MainWindow*>(parentWidget());
+    if (mainWindow == nullptr)
+    {
+        QMessageBox::warning(this, "Export MP4", "Unable to resolve the current ROM directory.");
+        return;
+    }
+
+    const QString romPath = mainWindow->ResolveKailleraRomByName(gameName);
+    if (romPath.isEmpty())
+    {
+        QMessageBox::warning(this,
+                             "Export MP4",
+                             "Could not find a ROM for:\n" + gameName +
+                             "\n\nMake sure the ROM is in the selected ROM directory and the ROM list is refreshed.");
+        return;
+    }
+
+    QString defaultOutputPath = QFileInfo(recordingPath).absolutePath() +
+                                QDir::separator() +
+                                QFileInfo(recordingPath).completeBaseName() +
+                                ".mp4";
+    const QString chosenOutputPath = QFileDialog::getSaveFileName(
+        this,
+        "Export MP4",
+        defaultOutputPath,
+        "MP4 Video (*.mp4)");
+    if (chosenOutputPath.isEmpty())
+    {
+        return;
+    }
+
+    startExportProcess(recordingPath, romPath, ensureMp4Extension(chosenOutputPath));
+}
+
+void KailleraPlaybackDialog::onExportProcessOutput()
+{
+    if (m_exportProcess == nullptr)
+    {
+        return;
+    }
+
+    m_exportLog += QString::fromLocal8Bit(m_exportProcess->readAll());
+    if (m_exportProgressDialog == nullptr)
+    {
+        return;
+    }
+
+    const QString summary = summarizeExportLog(m_exportLog);
+    m_exportProgressDialog->setLabelText(summary);
+}
+
+void KailleraPlaybackDialog::onExportProcessFinished(int exitCode, QProcess::ExitStatus exitStatus)
+{
+    onExportProcessOutput();
+
+    const bool canceled = m_exportCanceled;
+    const QString outputPath = m_exportOutputPath;
+    QString normalizedLog = m_exportLog;
+    normalizedLog.replace('\r', '\n');
+    const QStringList lines = normalizedLog.split('\n', Qt::SkipEmptyParts);
+    const QString logSummary = lines.isEmpty()
+        ? QString()
+        : lines.mid(std::max<qsizetype>(0, lines.size() - 12)).join('\n');
+
+    resetExportUi();
+
+    if (canceled)
+    {
+        QMessageBox::information(this, "Export MP4", "Export canceled.");
+        return;
+    }
+
+    if (exitStatus == QProcess::NormalExit && exitCode == 0)
+    {
+        QMessageBox::information(this,
+                                 "Export MP4",
+                                 "Export finished.\n\nSaved to:\n" + outputPath);
+        return;
+    }
+
+    QString message = "Export failed.";
+    if (!logSummary.isEmpty())
+    {
+        message += "\n\n" + logSummary;
+    }
+
+    QMessageBox::warning(this, "Export MP4", message);
 }
 
 void KailleraPlaybackDialog::onPlaybackDoubleClicked(int row, int column)

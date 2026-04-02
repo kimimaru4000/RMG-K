@@ -3124,6 +3124,13 @@ void MainWindow::closeNetplayChatPrompt(void)
 }
 #endif // NETPLAY
 
+#ifdef NETPLAY
+QString MainWindow::ResolveKailleraRomByName(QString gameName)
+{
+    return this->findRomByName(gameName);
+}
+#endif // NETPLAY
+
 QString MainWindow::findRomByName(QString gameName)
 {
     // Search ROM browser data for matching game name

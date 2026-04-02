@@ -17,6 +17,8 @@
 #include <QTableWidget>
 #include <QPushButton>
 #include <QLabel>
+#include <QProcess>
+#include <QProgressDialog>
 
 class KailleraPlaybackDialog : public QDialog
 {
@@ -34,12 +36,19 @@ private slots:
     void onPlaybackDelete();
     void onPlaybackRefresh();
     void onPlaybackOpenFolder();
+    void onPlaybackExport();
     void onPlaybackDoubleClicked(int row, int column);
     void onPlaybackTimer();
+    void onExportProcessOutput();
+    void onExportProcessFinished(int exitCode, QProcess::ExitStatus exitStatus);
 
 private:
     void setupUI();
     void populatePlaybackList();
+    QString getSelectedRecordingPath() const;
+    QString getSelectedRecordingGameName(QString* recordingPath = nullptr) const;
+    void resetExportUi();
+    void startExportProcess(const QString& recordingPath, const QString& romPath, const QString& outputPath);
 
     QTableWidget* m_playbackTable = nullptr;
     QPushButton* m_btnPlay = nullptr;
@@ -48,12 +57,18 @@ private:
     QPushButton* m_btnStop = nullptr;
     QPushButton* m_btnPBDelete = nullptr;
     QPushButton* m_btnPBRefresh = nullptr;
+    QPushButton* m_btnExport = nullptr;
     QPushButton* m_btnOpenFolder = nullptr;
     QLabel* m_frameLabel = nullptr;
     bool m_playbackWasActive = false;
     bool m_isPaused = false;
+    bool m_exportCanceled = false;
+    QString m_exportOutputPath;
+    QString m_exportLog;
 
     QTimer* m_playbackTimer = nullptr;
+    QProcess* m_exportProcess = nullptr;
+    QProgressDialog* m_exportProgressDialog = nullptr;
 };
 
 #endif // _WIN32
