@@ -667,13 +667,19 @@ void MainWindow::configureTheme(QApplication* app)
             app->setStyle(style);
         }
         app->setPalette(defaultPalette);
+    }
 
-        // Flatten toolbar buttons on the native Windows style to avoid
-        // them appearing permanently hovered/bordered in some builds
+    if (theme == "Modern")
+    {
+        // Flatten toolbar buttons to avoid them appearing permanently
+        // hovered/bordered on some Windows Qt style backends
+        bool isDark = app->palette().window().color().value() < 128;
+        QString hoverBg = isDark ? "rgba(255, 255, 255, 30)" : "rgba(0, 0, 0, 20)";
+        QString pressBg = isDark ? "rgba(255, 255, 255, 60)" : "rgba(0, 0, 0, 40)";
         this->setStyleSheet(this->styleSheet() +
-            " QToolBar QToolButton { border: none; background: transparent; }"
-            " QToolBar QToolButton:hover { background: rgba(128, 128, 128, 40); border-radius: 4px; }"
-            " QToolBar QToolButton:pressed { background: rgba(128, 128, 128, 80); border-radius: 4px; }");
+            " QToolBar QToolButton { border: none; background: transparent; border-radius: 4px; }"
+            " QToolBar QToolButton:hover { background: " + hoverBg + "; }"
+            " QToolBar QToolButton:pressed { background: " + pressBg + "; }");
     }
 #ifdef _WIN32
     else if (theme == "Windows Vista")
