@@ -5,6 +5,9 @@
 #include "../errr.h"
 #include "../kailleraclient.h"
 
+#include <algorithm>
+#include <chrono>
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -923,15 +926,24 @@ int kaillera_modify_play_values (void * values, int size) {
 
 int kaillera_ping_server(char * host, int port, int limit) {
 	k_socket psk;
-	psk.initialize(0);
-	psk.set_address(host, port);
+	if (!psk.initialize(0) || !psk.set_address(host, port)) {
+		return -1;
+	}
 	k_socket::check_sockets(0,0);
-	DWORD ti = GetTickCount();
-	psk.send("PING", 5);
-	
-	while (!psk.has_data() && (unsigned long)(GetTickCount() - ti) < (unsigned long)limit) {
-		k_socket::check_sockets(0,10);
+	const auto ti = std::chrono::steady_clock::now();
+	if (!psk.send("PING", 5)) {
+		return -1;
 	}
 	
-	return GetTickCount() - ti;
+	while (!psk.has_data()) {
+		const int elapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now() - ti).count();
+		if (elapsed >= limit) {
+			return -1;
+		}
+		k_socket::check_sockets(0, std::max(1, std::min(10, limit - elapsed)));
+	}
+	
+	return (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - ti).count();
 }
