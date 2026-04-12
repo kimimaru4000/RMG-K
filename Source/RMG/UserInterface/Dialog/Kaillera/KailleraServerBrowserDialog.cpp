@@ -1076,6 +1076,7 @@ void KailleraServerBrowserDialog::setupUI()
     m_userTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Interactive);
     m_userTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Interactive);
     m_userTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    m_userTable->verticalHeader()->setDefaultSectionSize(24);
     m_userTable->verticalHeader()->setVisible(false);
     m_userTable->setShowGrid(false);
     m_userTable->setAlternatingRowColors(true);
