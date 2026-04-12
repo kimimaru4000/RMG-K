@@ -1406,6 +1406,13 @@ void KailleraP2PDialog::onTravTimer()
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     m_travTimerStep++;
 
+    // Match the old p2p lobby behavior: keep refreshing ping once per second
+    // while connected, but stop once the game has actually started.
+    if (!n02::isGameRunning() && p2p_is_connected())
+    {
+        p2p_ping();
+    }
+
     // ---- HOST: NAT traversal registration & keepalive ----
     if (m_isHost && m_travHostEnabled)
     {
