@@ -48,9 +48,11 @@
 #include <QUdpSocket>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDialogButtonBox>
 #include <QFileInfo>
 #include <QFrame>
 #include <QEvent>
+#include <QFormLayout>
 #include <QListWidget>
 #include <QListView>
 #include <QMouseEvent>
@@ -751,9 +753,6 @@ public:
         const QColor highlightColor = palette.highlight().color().isValid()
             ? palette.highlight().color()
             : QColor(39, 128, 227);
-        const QColor railColor = favorite
-            ? QColor(232, 180, 74)
-            : blendColors(highlightColor, QColor(255, 255, 255), m_modern ? 0.18 : 0.30);
         const QColor neutralFill = m_modern ? QColor(248, 250, 253) : QColor(246, 246, 246);
         const QColor fillColor = selected
             ? blendColors(neutralFill, highlightColor, m_modern ? 0.16 : 0.11)
@@ -770,11 +769,10 @@ public:
             ? QColor(52, 86, 136)
             : QColor(88, 98, 112);
 
-        const QRect cardRect = option.rect.adjusted(4, 4, -4, -4);
-        const QRect railRect(cardRect.left() + 7, cardRect.top() + 8, 5, cardRect.height() - 16);
+        const QRect cardRect = option.rect.adjusted(2, 2, -2, -2);
         const QRect starRect = favoriteIconRect(cardRect);
-        const QRect nameRect(cardRect.left() + 20, cardRect.top() + 8, cardRect.width() - 44, 20);
-        const QRect hostRect(cardRect.left() + 20, cardRect.top() + 29, cardRect.width() - 28, 18);
+        const QRect nameRect(cardRect.left() + 12, cardRect.top() + 8, cardRect.width() - 36, 20);
+        const QRect hostRect(cardRect.left() + 12, cardRect.top() + 29, cardRect.width() - 20, 18);
 
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing, true);
@@ -784,10 +782,6 @@ public:
         painter->fillPath(cardPath, fillColor);
         painter->setPen(QPen(borderColor, selected ? 1.4 : 1.0));
         painter->drawPath(cardPath);
-
-        QPainterPath railPath;
-        railPath.addRoundedRect(railRect, 2.5, 2.5);
-        painter->fillPath(railPath, railColor);
 
         const QIcon favoriteIcon = themedFavoriteIcon(favorite ? "star-fill" : "star");
         favoriteIcon.paint(painter, starRect, Qt::AlignCenter,
@@ -819,7 +813,7 @@ public:
             (event->type() == QEvent::MouseButtonRelease || event->type() == QEvent::MouseButtonDblClick))
         {
             auto* mouseEvent = static_cast<QMouseEvent*>(event);
-            const QRect cardRect = option.rect.adjusted(4, 4, -4, -4);
+            const QRect cardRect = option.rect.adjusted(2, 2, -2, -2);
             if (favoriteIconRect(cardRect).contains(mouseEvent->pos()))
             {
                 if (m_toggleFavorite)
@@ -1787,7 +1781,7 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     m_p2pCopyAction->setToolTip("Copy connect code");
     connect(m_p2pCopyAction, &QAction::triggered, this, &KailleraNetplayDialog::onCopyP2PCode);
     codeLayout->addWidget(m_p2pCurrentCodeEdit);
-    m_btnP2PConfigureCode = new QPushButton("Configure", hostBody);
+    m_btnP2PConfigureCode = new QPushButton("Customize", hostBody);
     m_btnP2PConfigureCode->setObjectName("KailleraSecondaryButton");
     configureLauncherButtonMetrics(m_btnP2PConfigureCode);
     connect(m_btnP2PConfigureCode, &QPushButton::clicked, this, &KailleraNetplayDialog::onConfigureP2PCode);
@@ -1888,13 +1882,14 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     m_p2pStoredList->setResizeMode(QListView::Adjust);
     m_p2pStoredList->setMovement(QListView::Static);
     m_p2pStoredList->setUniformItemSizes(true);
-    m_p2pStoredList->setSpacing(2);
-    m_p2pStoredList->setGridSize(QSize(120, 68));
+    m_p2pStoredList->setSpacing(1);
+    m_p2pStoredList->setGridSize(QSize(116, 64));
     m_p2pStoredList->setSelectionMode(QAbstractItemView::SingleSelection);
     m_p2pStoredList->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_p2pStoredList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_p2pStoredList->setMouseTracking(true);
     m_p2pStoredList->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_p2pStoredList->setContextMenuPolicy(Qt::CustomContextMenu);
     m_p2pStoredList->setItemDelegate(new P2PStoredCardDelegate(
         theme == "Modern",
         [this](int row) { toggleP2PStoredFavorite(row); },
@@ -1912,6 +1907,8 @@ QWidget* KailleraNetplayDialog::createP2PTab()
                 m_p2pHostEdit->setText(m_p2pStoredUsers[row].host);
             }
         });
+    connect(m_p2pStoredList, &QListWidget::customContextMenuRequested,
+        this, &KailleraNetplayDialog::onP2PStoredRightClicked);
     connectBodyLayout->addWidget(m_p2pStoredList, 1);
     connectLayout->addWidget(connectBody);
     layout->addWidget(connectPane, 1);
@@ -4010,7 +4007,6 @@ void KailleraNetplayDialog::onP2PJoin()
         if (isCode)
         {
             // Join by traversal code — the dialog handles connecting via NAT traversal
-            rememberP2PStoredEntry(normalizedCode);
             hide();
 
             QString username = QString::fromUtf8(usernameBytes);
@@ -4052,7 +4048,6 @@ void KailleraNetplayDialog::onP2PJoin()
 
             if (p2p_core_connect(ipBytes.data(), port))
             {
-                rememberP2PStoredEntry(addrText);
                 hide();
 
                 QString username = QString::fromUtf8(usernameBytes);
@@ -4266,6 +4261,117 @@ void KailleraNetplayDialog::toggleP2PStoredFavorite(int row)
         m_p2pStoredList->setCurrentRow(insertIndex);
     }
     saveP2PStoredUsers();
+}
+
+void KailleraNetplayDialog::editP2PStoredEntry(int row)
+{
+    if (row < 0 || row >= m_p2pStoredUsers.size())
+    {
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("Edit P2P History Entry");
+
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* formLayout = new QFormLayout();
+    auto* nameEdit = new QLineEdit(m_p2pStoredUsers[row].name, &dialog);
+    auto* hostEdit = new QLineEdit(m_p2pStoredUsers[row].host, &dialog);
+    hostEdit->setPlaceholderText("Connect code or ip:port");
+
+    formLayout->addRow("Name:", nameEdit);
+    formLayout->addRow("IP/Code:", hostEdit);
+    layout->addLayout(formLayout);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    while (dialog.exec() == QDialog::Accepted)
+    {
+        QString normalizedHost = hostEdit->text().trimmed();
+        normalizedHost.remove(' ');
+
+        if (normalizedHost.isEmpty())
+        {
+            QMessageBox::warning(&dialog, "Edit P2P History Entry", "IP/Code cannot be empty.");
+            continue;
+        }
+
+        const int existingIndex = p2pStoredIndexByHost(normalizedHost);
+        if (existingIndex >= 0 && existingIndex != row)
+        {
+            QMessageBox::warning(&dialog, "Edit P2P History Entry",
+                "That IP/Code is already saved in your P2P history.");
+            continue;
+        }
+
+        m_p2pStoredUsers[row].name = nameEdit->text().trimmed();
+        m_p2pStoredUsers[row].host = normalizedHost;
+        refreshP2PStoredDisplay();
+        if (m_p2pStoredList != nullptr)
+        {
+            m_p2pStoredList->setCurrentRow(row);
+        }
+        saveP2PStoredUsers();
+        return;
+    }
+}
+
+void KailleraNetplayDialog::deleteP2PStoredEntry(int row)
+{
+    if (row < 0 || row >= m_p2pStoredUsers.size())
+    {
+        return;
+    }
+
+    m_p2pStoredUsers.removeAt(row);
+    refreshP2PStoredDisplay();
+    saveP2PStoredUsers();
+}
+
+void KailleraNetplayDialog::onP2PStoredRightClicked(const QPoint& pos)
+{
+    if (m_p2pStoredList == nullptr)
+    {
+        return;
+    }
+
+    QListWidgetItem* item = m_p2pStoredList->itemAt(pos);
+    if (item == nullptr)
+    {
+        return;
+    }
+
+    const int row = m_p2pStoredList->row(item);
+    if (row < 0 || row >= m_p2pStoredUsers.size())
+    {
+        return;
+    }
+
+    m_p2pStoredList->setCurrentRow(row);
+
+    QMenu menu(this);
+    QAction* favoriteAction = menu.addAction(
+        m_p2pStoredUsers[row].favorite ? "Unfavorite" : "Favorite");
+    QAction* editAction = menu.addAction("Edit");
+    QAction* deleteAction = menu.addAction("Delete");
+
+    QAction* selectedAction = menu.exec(m_p2pStoredList->viewport()->mapToGlobal(pos));
+    if (selectedAction == favoriteAction)
+    {
+        toggleP2PStoredFavorite(row);
+    }
+    else if (selectedAction == editAction)
+    {
+        editP2PStoredEntry(row);
+    }
+    else if (selectedAction == deleteAction)
+    {
+        deleteP2PStoredEntry(row);
+    }
 }
 
 void KailleraNetplayDialog::rememberP2PStoredEntry(const QString& host, const QString& nickname)

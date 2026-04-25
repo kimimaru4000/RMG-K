@@ -63,6 +63,7 @@ private slots:
     void onP2PJoin();
     void onP2PPasteAndGo();
     void onP2PWaitingGames();
+    void onP2PStoredRightClicked(const QPoint& pos);
     void onCopyP2PCode();
     void onConfigureP2PCode();
 
@@ -106,6 +107,8 @@ private:
     int p2pStoredIndexByHost(const QString& host) const;
     int p2pFavoriteCount() const;
     void toggleP2PStoredFavorite(int row);
+    void editP2PStoredEntry(int row);
+    void deleteP2PStoredEntry(int row);
     void rememberP2PStoredEntry(const QString& host, const QString& nickname = QString());
     void updateP2PStoredNickname(const QString& host, const QString& nickname);
     void showP2PCodeStatusMessage(const QString& message, const QColor& color);
