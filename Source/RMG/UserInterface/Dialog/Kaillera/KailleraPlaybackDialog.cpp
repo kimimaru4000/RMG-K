@@ -14,11 +14,13 @@
 
 #ifdef _WIN32
 
+#include <RMG-Core/Settings.hpp>
 #include <RMG-Core/Kaillera.hpp>
 #include <RMG-Core/Emulation.hpp>
 
 #include "n02_client.h"
 
+#include <QApplication>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -29,6 +31,7 @@
 #include <QFileInfo>
 #include <QFileDialog>
 #include <QCoreApplication>
+#include <QProgressBar>
 #include <QRegularExpression>
 
 #include <algorithm>
@@ -40,6 +43,200 @@
 static QString getKailleraRecordsDirectory()
 {
     return QString::fromStdString(CoreGetKailleraRecordsDirectory());
+}
+
+static QString currentThemeName()
+{
+    return QString::fromStdString(CoreSettingsGetStringValue(SettingsID::GUI_Theme));
+}
+
+static bool useModernPlaybackUi()
+{
+    return currentThemeName() == "Modern";
+}
+
+static QColor blendColors(const QColor& from, const QColor& to, qreal amount)
+{
+    const qreal clampedAmount = std::clamp(amount, 0.0, 1.0);
+    const qreal inverseAmount = 1.0 - clampedAmount;
+
+    return QColor::fromRgbF(from.redF() * inverseAmount + to.redF() * clampedAmount,
+                            from.greenF() * inverseAmount + to.greenF() * clampedAmount,
+                            from.blueF() * inverseAmount + to.blueF() * clampedAmount,
+                            from.alphaF() * inverseAmount + to.alphaF() * clampedAmount);
+}
+
+static QString cssColor(const QColor& color)
+{
+    return color.name(QColor::HexArgb);
+}
+
+static QIcon themedPlaybackIcon(const QString& iconName)
+{
+    const bool darkTheme = QApplication::palette().window().color().value() < 128;
+    return QIcon(QString(":/icons/%1/svg/%2.svg")
+        .arg(darkTheme ? "white" : "black", iconName));
+}
+
+static QString buildPlaybackStyleSheet()
+{
+    if (!useModernPlaybackUi())
+    {
+        return {};
+    }
+
+    const QPalette appPalette = QApplication::palette();
+    const QColor windowColor = appPalette.window().color();
+    const QColor shellColor = blendColors(windowColor, appPalette.base().color(), 0.74);
+    const bool darkTheme = windowColor.value() < 128;
+    const QString borderColor = darkTheme
+        ? cssColor(blendColors(windowColor, QColor(Qt::white), 0.20))
+        : "palette(mid)";
+
+    QString style = QString(
+        "QDialog#KailleraPlaybackDialog {"
+        "  background-color: palette(window);"
+        "}"
+        "QWidget#KailleraPaneGameList {"
+        "  border: 1px solid palette(mid);"
+        "  border-radius: 10px;"
+        "  background-color: %1;"
+        "}"
+        "QTableWidget#KailleraSurface {"
+        "  border: none;"
+        "  background: transparent;"
+        "  gridline-color: transparent;"
+        "  alternate-background-color: palette(alternate-base);"
+        "  selection-background-color: transparent;"
+        "  selection-color: palette(text);"
+        "}"
+        "QTableWidget#KailleraSurface::item:selected {"
+        "  background: transparent;"
+        "  color: palette(text);"
+        "}"
+        "QHeaderView::section {"
+        "  background-color: palette(window);"
+        "  border: none;"
+        "  border-bottom: 1px solid palette(mid);"
+        "  border-left: 1px solid palette(mid);"
+        "  padding: 6px 8px;"
+        "  font-weight: 600;"
+        "}"
+        "QHeaderView::section:first {"
+        "  border-left: none;"
+        "}"
+        "QTableWidget#KailleraSurface[playbackList=\"true\"] QHeaderView::section:first {"
+        "  border-top-left-radius: 9px;"
+        "}"
+        "QTableWidget#KailleraSurface[playbackList=\"true\"] QHeaderView::section:last {"
+        "  border-top-right-radius: 9px;"
+        "}"
+        "QLabel#KailleraPaneMeta {"
+        "  color: palette(mid);"
+        "  font-weight: 600;"
+        "}"
+        "QPushButton#KailleraPrimaryButton {"
+        "  border: 1px solid #0066b4;"
+        "  border-radius: 7px;"
+        "  min-height: 26px;"
+        "  padding: 4px 12px;"
+        "  font-weight: 700;"
+        "  color: white;"
+        "  background-color: #0078D7;"
+        "}"
+        "QPushButton#KailleraPrimaryButton:hover {"
+        "  background-color: #1c88dc;"
+        "}"
+        "QPushButton#KailleraPrimaryButton:pressed {"
+        "  border-color: #004f8b;"
+        "  background-color: #005a9e;"
+        "  padding-top: 5px;"
+        "  padding-bottom: 3px;"
+        "}"
+        "QPushButton#KailleraPrimaryButton:disabled {"
+        "  border: 1px solid palette(mid);"
+        "  color: palette(mid);"
+        "  background-color: palette(window);"
+        "}"
+        "QPushButton#KailleraSecondaryButton {"
+        "  border: 1px solid palette(mid);"
+        "  border-radius: 7px;"
+        "  min-height: 26px;"
+        "  padding: 4px 12px;"
+        "  background-color: palette(window);"
+        "}"
+        "QPushButton#KailleraSecondaryButton:hover {"
+        "  background-color: palette(light);"
+        "}"
+        "QPushButton#KailleraSecondaryButton:pressed {"
+        "  border-color: palette(shadow);"
+        "  background-color: palette(mid);"
+        "  padding-top: 5px;"
+        "  padding-bottom: 3px;"
+        "}"
+        "QPushButton#KailleraSecondaryButton:disabled {"
+        "  color: palette(mid);"
+        "  background-color: palette(window);"
+        "}"
+        "QPushButton#KailleraHeaderIconButton {"
+        "  border: 1px solid palette(mid);"
+        "  border-radius: 7px;"
+        "  min-width: 28px;"
+        "  max-width: 28px;"
+        "  min-height: 28px;"
+        "  max-height: 28px;"
+        "  padding: 0px;"
+        "  background-color: palette(window);"
+        "}"
+        "QPushButton#KailleraHeaderIconButton:hover {"
+        "  background-color: palette(light);"
+        "}"
+        "QPushButton#KailleraHeaderIconButton:pressed {"
+        "  border-color: palette(shadow);"
+        "  background-color: palette(mid);"
+        "  padding-top: 1px;"
+        "}"
+        "QProgressDialog#KailleraPlaybackExportDialog {"
+        "  background-color: palette(window);"
+        "}"
+        "QLabel#KailleraPlaybackProgressLabel {"
+        "  color: palette(text);"
+        "}"
+        "QProgressBar#KailleraPlaybackExportBar {"
+        "  border: 1px solid palette(mid);"
+        "  border-radius: 7px;"
+        "  min-height: 20px;"
+        "  background-color: palette(base);"
+        "  text-align: center;"
+        "}"
+        "QProgressBar#KailleraPlaybackExportBar::chunk {"
+        "  border-radius: 6px;"
+        "  background-color: #0078D7;"
+        "}").arg(cssColor(shellColor));
+
+    if (darkTheme)
+    {
+        style.replace("palette(mid)", borderColor);
+    }
+
+    return style;
+}
+
+static void configurePlaybackButton(QPushButton* button, const QString& objectName)
+{
+    if (button == nullptr)
+    {
+        return;
+    }
+
+    button->setAutoDefault(false);
+    button->setDefault(false);
+
+    if (useModernPlaybackUi())
+    {
+        button->setObjectName(objectName);
+        button->setCursor(Qt::PointingHandCursor);
+    }
 }
 
 static QString ensureMp4Extension(QString path)
@@ -117,6 +314,12 @@ static QString normalizeStatusLine(QString line)
     return line;
 }
 
+static constexpr double kExportCapturePhaseFraction = 0.95;
+static constexpr double kExportFinalizingMaxFraction = 0.99;
+static constexpr double kExportFinalizeEstimateRatio = 0.015;
+static constexpr double kExportMinFinalizeSeconds = 1.5;
+static constexpr double kExportMaxFinalizeSeconds = 5.0;
+
 KailleraPlaybackDialog::KailleraPlaybackDialog(QWidget* parent)
     : QDialog(parent)
 {
@@ -148,14 +351,47 @@ void KailleraPlaybackDialog::setupUI()
 {
     setWindowTitle("Playback");
     setMinimumSize(520, 400);
-    resize(580, 450);
+    resize(700, 450);
+    setObjectName("KailleraPlaybackDialog");
 
-    setStyleSheet("QTableWidget::item:selected { background-color: #0078D7; color: white; }");
+    const bool modern = useModernPlaybackUi();
+    if (modern)
+    {
+        setStyleSheet(buildPlaybackStyleSheet());
+    }
+    else
+    {
+        setStyleSheet("QTableWidget::item:selected { background-color: #0078D7; color: white; }");
+    }
 
     auto* mainLayout = new QVBoxLayout(this);
+    if (modern)
+    {
+        mainLayout->setContentsMargins(12, 12, 12, 12);
+        mainLayout->setSpacing(10);
+    }
+
+    QWidget* tablePane = nullptr;
+    QVBoxLayout* tablePaneLayout = nullptr;
+    QWidget* tableParent = this;
+    if (modern)
+    {
+        tablePane = new QWidget(this);
+        tablePane->setObjectName("KailleraPaneGameList");
+        tablePaneLayout = new QVBoxLayout(tablePane);
+        tablePaneLayout->setContentsMargins(1, 1, 1, 1);
+        tablePaneLayout->setSpacing(0);
+        tableParent = tablePane;
+    }
 
     // Recordings table
-    m_playbackTable = new QTableWidget(0, 6, this);
+    m_playbackTable = new QTableWidget(0, 6, tableParent);
+    if (modern)
+    {
+        m_playbackTable->setObjectName("KailleraSurface");
+        m_playbackTable->setProperty("playbackList", true);
+        m_playbackTable->setAlternatingRowColors(true);
+    }
     m_playbackTable->setHorizontalHeaderLabels({"Date", "Players", "Game", "Duration", "Size", "Filename"});
     m_playbackTable->horizontalHeader()->setStretchLastSection(true);
     m_playbackTable->verticalHeader()->setVisible(false);
@@ -168,15 +404,27 @@ void KailleraPlaybackDialog::setupUI()
     m_playbackTable->setColumnWidth(0, 100);
     m_playbackTable->setColumnWidth(1, 160);
     m_playbackTable->setColumnWidth(2, 140);
-    m_playbackTable->setColumnWidth(3, 60);
+    m_playbackTable->setColumnWidth(3, 72);
     m_playbackTable->setColumnWidth(4, 60);
     applyNoAccentStyle(m_playbackTable);
     installHeaderDoubleClickSortToggle(m_playbackTable);
     connect(m_playbackTable, &QTableWidget::cellDoubleClicked, this, &KailleraPlaybackDialog::onPlaybackDoubleClicked);
-    mainLayout->addWidget(m_playbackTable);
+    if (tablePaneLayout != nullptr)
+    {
+        tablePaneLayout->addWidget(m_playbackTable);
+        mainLayout->addWidget(tablePane, 1);
+    }
+    else
+    {
+        mainLayout->addWidget(m_playbackTable, 1);
+    }
 
-    // Buttons
+    // Playback controls
     auto* btnLayout = new QHBoxLayout();
+    if (modern)
+    {
+        btnLayout->setSpacing(8);
+    }
     m_btnPlay = new QPushButton("Play", this);
     m_btnPause = new QPushButton("Pause", this);
     m_btnStepForward = new QPushButton(">>", this);
@@ -185,6 +433,12 @@ void KailleraPlaybackDialog::setupUI()
     m_btnPBRefresh = new QPushButton("Refresh", this);
     m_btnExport = new QPushButton("Export MP4", this);
     m_btnOpenFolder = new QPushButton("Open Folder", this);
+
+    m_btnPBRefresh->setText(QString());
+    m_btnPBRefresh->setToolTip("Refresh");
+    m_btnPBRefresh->setAccessibleName("Refresh");
+    m_btnPBRefresh->setIcon(themedPlaybackIcon("refresh-line"));
+    m_btnPBRefresh->setIconSize(QSize(18, 18));
 
     connect(m_btnPlay, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackPlay);
     connect(m_btnPause, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackPause);
@@ -195,31 +449,56 @@ void KailleraPlaybackDialog::setupUI()
     connect(m_btnExport, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackExport);
     connect(m_btnOpenFolder, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackOpenFolder);
 
+    if (modern)
+    {
+        configurePlaybackButton(m_btnPlay, "KailleraPrimaryButton");
+        configurePlaybackButton(m_btnPause, "KailleraSecondaryButton");
+        configurePlaybackButton(m_btnStepForward, "KailleraSecondaryButton");
+        configurePlaybackButton(m_btnStop, "KailleraSecondaryButton");
+        configurePlaybackButton(m_btnPBDelete, "KailleraSecondaryButton");
+        configurePlaybackButton(m_btnPBRefresh, "KailleraHeaderIconButton");
+        configurePlaybackButton(m_btnExport, "KailleraPrimaryButton");
+        configurePlaybackButton(m_btnOpenFolder, "KailleraSecondaryButton");
+    }
+
     btnLayout->addWidget(m_btnPlay);
     btnLayout->addWidget(m_btnPause);
     btnLayout->addWidget(m_btnStepForward);
     btnLayout->addWidget(m_btnStop);
-    btnLayout->addWidget(m_btnPBDelete);
-    btnLayout->addWidget(m_btnPBRefresh);
-    btnLayout->addWidget(m_btnExport);
     btnLayout->addStretch();
-    btnLayout->addWidget(m_btnOpenFolder);
     mainLayout->addLayout(btnLayout);
 
     // Frame counter
     m_frameLabel = new QLabel("", this);
+    if (modern)
+    {
+        m_frameLabel->setObjectName("KailleraPaneMeta");
+    }
     mainLayout->addWidget(m_frameLabel);
 
-    // Bottom close button
+    // Bottom actions
     auto* bottomLayout = new QHBoxLayout();
+    if (modern)
+    {
+        bottomLayout->setSpacing(8);
+    }
+    bottomLayout->addWidget(m_btnPBDelete);
+    bottomLayout->addWidget(m_btnExport);
     bottomLayout->addStretch();
+    bottomLayout->addWidget(m_btnPBRefresh);
+    bottomLayout->addWidget(m_btnOpenFolder);
     auto* btnClose = new QPushButton("Close", this);
+    if (modern)
+    {
+        configurePlaybackButton(btnClose, "KailleraSecondaryButton");
+    }
     connect(btnClose, &QPushButton::clicked, this, &QDialog::reject);
     bottomLayout->addWidget(btnClose);
     mainLayout->addLayout(bottomLayout);
 
     // Populate on creation
     populatePlaybackList();
+    updatePlaybackControls();
 }
 
 void KailleraPlaybackDialog::onPlaybackTimer()
@@ -251,9 +530,35 @@ void KailleraPlaybackDialog::onPlaybackTimer()
     {
         m_playbackWasActive = false;
         m_isPaused = false;
-        if (m_btnPause) m_btnPause->setText("Pause");
         CoreMarkKailleraGameInactive();
         CoreStopEmulation();
+        updatePlaybackControls();
+    }
+}
+
+void KailleraPlaybackDialog::updatePlaybackControls()
+{
+    const bool playbackSessionOpen = m_playbackWasActive || n02::isPlaybackActive();
+
+    if (m_btnPlay != nullptr)
+    {
+        m_btnPlay->setVisible(!playbackSessionOpen);
+    }
+
+    if (m_btnPause != nullptr)
+    {
+        m_btnPause->setVisible(playbackSessionOpen);
+        m_btnPause->setText(m_isPaused ? "Play" : "Pause");
+    }
+
+    if (m_btnStepForward != nullptr)
+    {
+        m_btnStepForward->setVisible(playbackSessionOpen);
+    }
+
+    if (m_btnStop != nullptr)
+    {
+        m_btnStop->setVisible(playbackSessionOpen);
     }
 }
 
@@ -568,6 +873,7 @@ void KailleraPlaybackDialog::resetExportUi()
     m_exportTargetSpeed.clear();
     m_exportCapturedFrames = 0;
     m_exportTotalFrames = 0;
+    m_exportCaptureCompleteElapsedMs = -1;
 
     if (m_exportProgressDialog != nullptr)
     {
@@ -601,6 +907,7 @@ void KailleraPlaybackDialog::startExportProcess(const QString& recordingPath,
     m_exportTargetSpeed.clear();
     m_exportCapturedFrames = 0;
     m_exportTotalFrames = std::max(0, totalFrames);
+    m_exportCaptureCompleteElapsedMs = -1;
     m_exportOutputPath = outputPath;
     m_exportElapsedTimer.start();
 
@@ -627,6 +934,25 @@ void KailleraPlaybackDialog::startExportProcess(const QString& recordingPath,
     m_exportProgressDialog->setAutoReset(false);
     m_exportProgressDialog->setMinimumWidth(520);
     m_exportProgressDialog->setMaximumWidth(700);
+    if (useModernPlaybackUi())
+    {
+        m_exportProgressDialog->setObjectName("KailleraPlaybackExportDialog");
+
+        auto* progressLabel = new QLabel(m_exportProgressDialog);
+        progressLabel->setObjectName("KailleraPlaybackProgressLabel");
+        progressLabel->setWordWrap(true);
+        m_exportProgressDialog->setLabel(progressLabel);
+
+        auto* progressBar = new QProgressBar(m_exportProgressDialog);
+        progressBar->setObjectName("KailleraPlaybackExportBar");
+        progressBar->setTextVisible(true);
+        m_exportProgressDialog->setBar(progressBar);
+
+        auto* cancelButton = new QPushButton("Cancel", m_exportProgressDialog);
+        configurePlaybackButton(cancelButton, "KailleraSecondaryButton");
+        m_exportProgressDialog->setCancelButton(cancelButton);
+        m_exportProgressDialog->setStyleSheet(buildPlaybackStyleSheet());
+    }
     if (m_exportTotalFrames > 0)
     {
         m_exportProgressDialog->setRange(0, m_exportTotalFrames);
@@ -682,6 +1008,8 @@ void KailleraPlaybackDialog::onPlaybackPlay()
     if (n02::playbackLoad(pathBytes.constData()))
     {
         m_playbackWasActive = true;
+        m_isPaused = false;
+        updatePlaybackControls();
     }
     else
     {
@@ -696,7 +1024,6 @@ void KailleraPlaybackDialog::onPlaybackStop()
     {
         CoreResumeEmulation();
         m_isPaused = false;
-        if (m_btnPause) m_btnPause->setText("Pause");
     }
 
     if (n02::isPlaybackActive())
@@ -704,8 +1031,10 @@ void KailleraPlaybackDialog::onPlaybackStop()
         n02::endGame();
     }
     m_playbackWasActive = false;
+    m_isPaused = false;
     CoreMarkKailleraGameInactive();
     CoreStopEmulation();
+    updatePlaybackControls();
 }
 
 void KailleraPlaybackDialog::onPlaybackPause()
@@ -717,7 +1046,7 @@ void KailleraPlaybackDialog::onPlaybackPause()
         if (CorePauseEmulation())
         {
             m_isPaused = true;
-            if (m_btnPause) m_btnPause->setText("Resume");
+            updatePlaybackControls();
         }
     }
     else
@@ -725,7 +1054,7 @@ void KailleraPlaybackDialog::onPlaybackPause()
         if (CoreResumeEmulation())
         {
             m_isPaused = false;
-            if (m_btnPause) m_btnPause->setText("Pause");
+            updatePlaybackControls();
         }
     }
 }
@@ -739,7 +1068,7 @@ void KailleraPlaybackDialog::onPlaybackStepForward()
     {
         CorePauseEmulation();
         m_isPaused = true;
-        if (m_btnPause) m_btnPause->setText("Resume");
+        updatePlaybackControls();
         return;
     }
 
@@ -978,6 +1307,65 @@ void KailleraPlaybackDialog::processExportOutputLine(const QString& rawLine)
     m_exportStatusLine = normalizeStatusLine(line);
 }
 
+double KailleraPlaybackDialog::estimateExportFinalizeSeconds() const
+{
+    if (!m_exportElapsedTimer.isValid())
+    {
+        return kExportMinFinalizeSeconds;
+    }
+
+    const double elapsedSeconds =
+        static_cast<double>(m_exportElapsedTimer.elapsed()) / 1000.0;
+
+    return std::clamp(elapsedSeconds * kExportFinalizeEstimateRatio,
+                      kExportMinFinalizeSeconds,
+                      kExportMaxFinalizeSeconds);
+}
+
+bool KailleraPlaybackDialog::isExportCaptureComplete() const
+{
+    return m_exportTotalFrames > 0 && m_exportCapturedFrames >= m_exportTotalFrames;
+}
+
+bool KailleraPlaybackDialog::isExportFinalizing() const
+{
+    return isExportCaptureComplete()
+        && m_exportProcess != nullptr
+        && m_exportProcess->state() != QProcess::NotRunning;
+}
+
+double KailleraPlaybackDialog::exportProgressFraction() const
+{
+    if (m_exportProcess != nullptr && m_exportProcess->state() == QProcess::NotRunning)
+    {
+        return 1.0;
+    }
+
+    if (m_exportTotalFrames <= 0)
+    {
+        return 0.0;
+    }
+
+    const int boundedFrames = std::clamp(m_exportCapturedFrames, 0, m_exportTotalFrames);
+    const double captureFraction =
+        static_cast<double>(boundedFrames) / static_cast<double>(m_exportTotalFrames);
+
+    if (!isExportFinalizing() || m_exportCaptureCompleteElapsedMs < 0)
+    {
+        return std::clamp(captureFraction * kExportCapturePhaseFraction, 0.0, 1.0);
+    }
+
+    const qint64 finalizingElapsedMs =
+        std::max<qint64>(0, m_exportElapsedTimer.elapsed() - m_exportCaptureCompleteElapsedMs);
+    const double finalizeFraction = std::clamp(
+        static_cast<double>(finalizingElapsedMs) / (estimateExportFinalizeSeconds() * 1000.0),
+        0.0,
+        1.0);
+
+    const double finalizingRange = kExportFinalizingMaxFraction - kExportCapturePhaseFraction;
+    return kExportCapturePhaseFraction + finalizingRange * finalizeFraction;
+}
+
 QString KailleraPlaybackDialog::buildExportProgressSummary() const
 {
     QStringList lines;
@@ -990,8 +1378,7 @@ QString KailleraPlaybackDialog::buildExportProgressSummary() const
     if (m_exportTotalFrames > 0)
     {
         const int boundedFrames = std::clamp(m_exportCapturedFrames, 0, m_exportTotalFrames);
-        const double percent = (100.0 * static_cast<double>(boundedFrames)) /
-                               static_cast<double>(m_exportTotalFrames);
+        const double percent = exportProgressFraction() * 100.0;
         lines << QString("Progress: %1 / %2 frames (%3%)")
                      .arg(boundedFrames)
                      .arg(m_exportTotalFrames)
@@ -1016,15 +1403,25 @@ QString KailleraPlaybackDialog::buildExportProgressSummary() const
                      .arg(QString::number(exportFps, 'f', 1))
                      .arg(QString::number(realtimeMultiplier, 'f', 2));
 
-        if (m_exportTotalFrames > 0 && m_exportCapturedFrames < m_exportTotalFrames)
+        if (isExportFinalizing())
+        {
+            const double finalizeSeconds = estimateExportFinalizeSeconds();
+            const double finalizingElapsedSeconds =
+                std::max(0.0,
+                         elapsedSeconds -
+                             (static_cast<double>(m_exportCaptureCompleteElapsedMs) / 1000.0));
+            const double etaSeconds = std::max(0.0, finalizeSeconds - finalizingElapsedSeconds);
+            lines << QString("ETA: %1").arg(formatExportDuration(etaSeconds));
+        }
+        else if (m_exportTotalFrames > 0 && m_exportCapturedFrames < m_exportTotalFrames)
         {
             const double remainingFrames = static_cast<double>(m_exportTotalFrames - m_exportCapturedFrames);
-            const double etaSeconds = remainingFrames / exportFps;
+            const double etaSeconds = (remainingFrames / exportFps) + estimateExportFinalizeSeconds();
             lines << QString("ETA: %1").arg(formatExportDuration(etaSeconds));
         }
         else if (m_exportTotalFrames > 0)
         {
-            lines << "ETA: 00:00";
+            lines << QString("ETA: %1").arg(formatExportDuration(estimateExportFinalizeSeconds()));
         }
         else
         {
@@ -1047,9 +1444,15 @@ QString KailleraPlaybackDialog::buildExportProgressSummary() const
         lines << "Target emu speed: " + m_exportTargetSpeed;
     }
 
-    if (!m_exportStatusLine.isEmpty())
+    QString statusLine = m_exportStatusLine;
+    if (isExportFinalizing() && (statusLine.isEmpty() || statusLine == "Capturing frames..."))
     {
-        lines << "Status: " + m_exportStatusLine;
+        statusLine = "Finalizing MP4...";
+    }
+
+    if (!statusLine.isEmpty())
+    {
+        lines << "Status: " + statusLine;
     }
     else
     {
@@ -1066,9 +1469,15 @@ void KailleraPlaybackDialog::updateExportProgressDialog()
         return;
     }
 
+    if (m_exportCaptureCompleteElapsedMs < 0 && isExportCaptureComplete() && m_exportElapsedTimer.isValid())
+    {
+        m_exportCaptureCompleteElapsedMs = m_exportElapsedTimer.elapsed();
+    }
+
     if (m_exportTotalFrames > 0)
     {
-        const int boundedValue = std::clamp(m_exportCapturedFrames, 0, m_exportTotalFrames);
+        const int boundedValue = static_cast<int>(std::llround(
+            exportProgressFraction() * static_cast<double>(m_exportTotalFrames)));
         if (m_exportProgressDialog->maximum() != m_exportTotalFrames)
         {
             m_exportProgressDialog->setRange(0, m_exportTotalFrames);

@@ -45,6 +45,7 @@ private slots:
 
 private:
     void setupUI();
+    void updatePlaybackControls();
     void populatePlaybackList();
     QString getSelectedRecordingPath() const;
     QString getSelectedRecordingGameName(QString* recordingPath = nullptr, int* totalFrames = nullptr) const;
@@ -54,6 +55,10 @@ private:
     void processExportOutputLine(const QString& line);
     void updateExportProgressDialog();
     QString buildExportProgressSummary() const;
+    double estimateExportFinalizeSeconds() const;
+    bool isExportCaptureComplete() const;
+    bool isExportFinalizing() const;
+    double exportProgressFraction() const;
 
     QTableWidget* m_playbackTable = nullptr;
     QPushButton* m_btnPlay = nullptr;
@@ -76,6 +81,7 @@ private:
     QString m_exportTargetSpeed;
     int m_exportCapturedFrames = 0;
     int m_exportTotalFrames = 0;
+    qint64 m_exportCaptureCompleteElapsedMs = -1;
     QElapsedTimer m_exportElapsedTimer;
 
     QTimer* m_playbackTimer = nullptr;
