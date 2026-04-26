@@ -361,7 +361,7 @@ void KailleraPlaybackDialog::setupUI()
     }
     else
     {
-        setStyleSheet("QTableWidget::item:selected { background-color: #0078D7; color: white; }");
+        setStyleSheet("QTableWidget::item:selected { background-color: rgba(0, 120, 215, 0.45); color: white; }");
     }
 
     auto* mainLayout = new QVBoxLayout(this);

@@ -271,6 +271,12 @@ static l_Setting get_setting(SettingsID settingId)
     case SettingsID::Kaillera_ServerListCountries:
         setting = {SETTING_SECTION_KAILLERA, "ServerListCountries", std::string("")};
         break;
+    case SettingsID::Kaillera_ServerListPings:
+        setting = {SETTING_SECTION_KAILLERA, "ServerListPings", std::string("")};
+        break;
+    case SettingsID::Kaillera_ServerListPingValues:
+        setting = {SETTING_SECTION_KAILLERA, "ServerListPingValues", std::string("")};
+        break;
     case SettingsID::Kaillera_LiveServerCacheNames:
         setting = {SETTING_SECTION_KAILLERA, "LiveServerCacheNames", std::string("")};
         break;
@@ -279,6 +285,12 @@ static l_Setting get_setting(SettingsID settingId)
         break;
     case SettingsID::Kaillera_LiveServerCacheCountries:
         setting = {SETTING_SECTION_KAILLERA, "LiveServerCacheCountries", std::string("")};
+        break;
+    case SettingsID::Kaillera_LiveServerCachePings:
+        setting = {SETTING_SECTION_KAILLERA, "LiveServerCachePings", std::string("")};
+        break;
+    case SettingsID::Kaillera_LiveServerCachePingValues:
+        setting = {SETTING_SECTION_KAILLERA, "LiveServerCachePingValues", std::string("")};
         break;
     case SettingsID::Kaillera_BrowserGeometry:
         setting = {SETTING_SECTION_KAILLERA, "BrowserGeometry", std::string("")};
@@ -989,6 +1001,18 @@ static l_Setting get_setting(SettingsID settingId)
     case SettingsID::Input_ZTrigger_ExtraData:
         setting = {"", "ZTrigger_ExtraData"};
         break;
+    case SettingsID::Input_ZTrigger2_InputType:
+        setting = {"", "ZTrigger2_InputType"};
+        break;
+    case SettingsID::Input_ZTrigger2_Name:
+        setting = {"", "ZTrigger2_Name"};
+        break;
+    case SettingsID::Input_ZTrigger2_Data:
+        setting = {"", "ZTrigger2_Data"};
+        break;
+    case SettingsID::Input_ZTrigger2_ExtraData:
+        setting = {"", "ZTrigger2_ExtraData"};
+        break;
     case SettingsID::Input_AnalogStickUp_InputType:
         setting = {"", "AnalogStickUp_InputType"};
         break;
@@ -1533,6 +1557,9 @@ static l_Setting get_setting(SettingsID settingId)
         break;
     case SettingsID::GCAInput_Map_Z:
         setting = {SETTING_SECTION_GCA, "Map_Z", 4};
+        break;
+    case SettingsID::GCAInput_Map_Z2:
+        setting = {SETTING_SECTION_GCA, "Map_Z2", -1};
         break;
     case SettingsID::GCAInput_Map_L:
         setting = {SETTING_SECTION_GCA, "Map_L", 12};

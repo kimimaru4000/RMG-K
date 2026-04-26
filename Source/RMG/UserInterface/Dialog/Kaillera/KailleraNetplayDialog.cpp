@@ -68,6 +68,7 @@
 #include <ctime>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <algorithm>
 
 #include <windows.h>
@@ -77,6 +78,57 @@ static constexpr int kMaxP2PRecentEntries = 12;
 namespace {
 
 static constexpr int kMaxTraversalDigits = 3;
+static constexpr int kConnectPollIntervalMs = 1;
+int parseStoredPingValue(const QString& storedPingText, const QString& storedPingValueText)
+{
+    bool ok = false;
+    const int storedPingValue = storedPingValueText.trimmed().toInt(&ok);
+    if (ok)
+    {
+        return storedPingValue;
+    }
+
+    const QString pingText = storedPingText.trimmed();
+    if (pingText == "...")
+    {
+        return 999998;
+    }
+    if (pingText.compare("timeout", Qt::CaseInsensitive) == 0)
+    {
+        return 999999;
+    }
+    if (pingText.endsWith("ms", Qt::CaseInsensitive))
+    {
+        QString msText = pingText;
+        msText.chop(2);
+        const int pingMs = msText.toInt(&ok);
+        if (ok)
+        {
+            return pingMs;
+        }
+    }
+
+    return 999999;
+}
+
+QString normalizedStoredPingText(const QString& storedPingText, int pingValue)
+{
+    const QString pingText = storedPingText.trimmed();
+    if (!pingText.isEmpty())
+    {
+        return pingText;
+    }
+    if (pingValue == 999998)
+    {
+        return "...";
+    }
+    if (pingValue >= 0 && pingValue < 999998)
+    {
+        return QString::number(pingValue) + "ms";
+    }
+
+    return "-";
+}
 
 int compareNullableInts(int left, int right)
 {
@@ -1048,6 +1100,10 @@ static QString buildLauncherStyleSheet(const QString& theme)
         "  border-top: 1px solid palette(mid);"
         "  border-left: 1px solid palette(mid);"
         "}"
+        "QTableWidget#KailleraSurface[launcherWaitingGamesTable=\"true\"] {"
+        "  border: 1px solid palette(mid);"
+        "  background-color: palette(base);"
+        "}"
         "QTableWidget#KailleraSurface[launcherP2PTable=\"true\"] {"
         "  border: 1px solid palette(mid);"
         "}");
@@ -1077,7 +1133,7 @@ static QString buildLauncherStyleSheet(const QString& theme)
             "QTabWidget#KailleraLauncherTabs QTabBar::tab:selected {"
             "  background-color: palette(base);"
             "  border-bottom: none;"
-            "  font-weight: 600;"
+            "  font-weight: 500;"
             "}"
             "QTabWidget#KailleraLauncherTabs QTabBar::tab:!selected {"
             "  background-color: %4;"
@@ -1164,13 +1220,18 @@ static QString buildLauncherStyleSheet(const QString& theme)
             "  border: 1px solid palette(mid);"
             "  border-radius: %1;"
             "  padding: 4px 12px;"
-            "  background-color: palette(button);"
+            "  background-color: palette(window);"
+            "  font-weight: 600;"
             "}"
             "QPushButton#KailleraSecondaryButton:hover {"
+            "  border-color: palette(dark);"
             "  background-color: palette(light);"
             "}"
             "QPushButton#KailleraSecondaryButton:pressed {"
-            "  background-color: palette(midlight);"
+            "  border-color: palette(shadow);"
+            "  background-color: palette(mid);"
+            "  padding-top: 5px;"
+            "  padding-bottom: 3px;"
             "}"
             "QPushButton#KailleraP2PIconButton {"
             "  border: 1px solid palette(mid);"
@@ -1241,6 +1302,7 @@ KailleraNetplayDialog::KailleraNetplayDialog(QWidget* parent)
     // This replaces the blocking while-loop in n02::selectServerDialog()
     n02::setStateInput(0);
     m_stateMachineTimer = new QTimer(this);
+    m_stateMachineTimer->setTimerType(Qt::PreciseTimer);
     connect(m_stateMachineTimer, &QTimer::timeout, this, &KailleraNetplayDialog::onStateMachineTimer);
     m_stateMachineTimer->start(1);
 
@@ -1344,7 +1406,7 @@ QWidget* KailleraNetplayDialog::createServerTab()
     m_serverTable = new QTableWidget(0, 6, tablePane);
     m_serverTable->setObjectName("KailleraSurface");
     m_serverTable->setProperty("launcherServerTable", true);
-    m_serverTable->setHorizontalHeaderLabels({"*", "Name", "Country", "Players", "Ping", "IP"});
+    m_serverTable->setHorizontalHeaderLabels({"*", "Name", "Region", "Players", "Ping", "IP"});
     m_serverTable->verticalHeader()->setVisible(false);
     m_serverTable->setShowGrid(false);
     m_serverTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -1411,7 +1473,7 @@ QWidget* KailleraNetplayDialog::createServerTab()
         m_serverSortOrder = order;
         m_serverTable->horizontalHeader()->setSortIndicator(section, order);
 
-        refreshServerListDisplay();
+        refreshServerListDisplay(true);
         if (!m_pingAllInProgress)
         {
             cacheVisibleLiveServerOrder();
@@ -1598,8 +1660,15 @@ QWidget* KailleraNetplayDialog::createP2PTab()
     });
 
     // Host button
+    const int hostStatusIndent = codeLabel->sizeHint().width() + codeLayout->spacing();
     auto* hostBtnLayout = new QHBoxLayout();
+    hostBtnLayout->addSpacing(hostStatusIndent);
+    m_p2pCodeStatusLabel = new QLabel(hostBody);
+    m_p2pCodeStatusLabel->hide();
+    m_p2pCodeStatusLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    hostBtnLayout->addWidget(m_p2pCodeStatusLabel, 0, Qt::AlignLeft | Qt::AlignVCenter);
     hostBtnLayout->addStretch();
+    hostBtnLayout->addSpacing(10);
     m_btnP2PHost = new QPushButton("Host", hostBody);
     m_btnP2PHost->setObjectName("KailleraPrimaryButton");
     configureLauncherButtonMetrics(m_btnP2PHost);
@@ -1714,8 +1783,9 @@ void KailleraNetplayDialog::loadSettings()
     }
     m_usernameEdit->setText(QString::fromStdString(username));
 
-    // Load frame delay
-    int frameDelay = CoreSettingsGetIntValue(SettingsID::Kaillera_SpoofPing);
+    // Load the server-mode frame-delay selection.
+    // This is a dropdown index (Auto, 1-9 frames), not a raw spoof-ping value.
+    int frameDelay = CoreSettingsGetIntValue(SettingsID::Kaillera_FrameDelay);
     if (frameDelay < 0 || frameDelay > 9) frameDelay = 0;
     m_frameDelayCombo->setCurrentIndex(frameDelay);
 
@@ -1737,7 +1807,7 @@ void KailleraNetplayDialog::saveSettings()
 {
     CoreSettingsSetValue(SettingsID::Kaillera_Username,
                          m_usernameEdit->text().toStdString());
-    CoreSettingsSetValue(SettingsID::Kaillera_SpoofPing,
+    CoreSettingsSetValue(SettingsID::Kaillera_FrameDelay,
                          m_frameDelayCombo->currentIndex());
 
     // Tab order: 0=Server, 1=P2P
@@ -1764,16 +1834,25 @@ void KailleraNetplayDialog::loadServerList()
         CoreSettingsGetStringListValue(SettingsID::Kaillera_ServerListHosts);
     const std::vector<std::string> favoriteCountries =
         CoreSettingsGetStringListValue(SettingsID::Kaillera_ServerListCountries);
+    const std::vector<std::string> favoritePings =
+        CoreSettingsGetStringListValue(SettingsID::Kaillera_ServerListPings);
+    const std::vector<std::string> favoritePingValues =
+        CoreSettingsGetStringListValue(SettingsID::Kaillera_ServerListPingValues);
     for (size_t i = 0; i < favoriteNames.size() && i < favoriteHosts.size(); ++i)
     {
+        const QString storedPingText =
+            (i < favoritePings.size()) ? QString::fromStdString(favoritePings[i]) : QString();
+        const QString storedPingValueText =
+            (i < favoritePingValues.size()) ? QString::fromStdString(favoritePingValues[i]) : QString();
+        const int storedPingValue = parseStoredPingValue(storedPingText, storedPingValueText);
         m_favoriteServers.append({
             QString::fromStdString(favoriteNames[i]),
             QString::fromStdString(favoriteHosts[i]),
             (i < favoriteCountries.size()) ? QString::fromStdString(favoriteCountries[i]) : QString(),
             "-",
             -1,
-            "-",
-            999999
+            normalizedStoredPingText(storedPingText, storedPingValue),
+            storedPingValue
         });
     }
 
@@ -1783,23 +1862,51 @@ void KailleraNetplayDialog::loadServerList()
         CoreSettingsGetStringListValue(SettingsID::Kaillera_LiveServerCacheHosts);
     const std::vector<std::string> cachedCountries =
         CoreSettingsGetStringListValue(SettingsID::Kaillera_LiveServerCacheCountries);
+    const std::vector<std::string> cachedPings =
+        CoreSettingsGetStringListValue(SettingsID::Kaillera_LiveServerCachePings);
+    const std::vector<std::string> cachedPingValues =
+        CoreSettingsGetStringListValue(SettingsID::Kaillera_LiveServerCachePingValues);
     for (size_t i = 0; i < cachedNames.size() && i < cachedHosts.size(); ++i)
     {
         const QString host = QString::fromStdString(cachedHosts[i]);
-        if (host.isEmpty() || favoriteServerIndexByHost(host) >= 0)
+        if (host.isEmpty())
         {
             continue;
         }
 
+        const QString storedPingText =
+            (i < cachedPings.size()) ? QString::fromStdString(cachedPings[i]) : QString();
+        const QString storedPingValueText =
+            (i < cachedPingValues.size()) ? QString::fromStdString(cachedPingValues[i]) : QString();
+        const int storedPingValue = parseStoredPingValue(storedPingText, storedPingValueText);
         m_cachedLiveServers.append({
             QString::fromStdString(cachedNames[i]),
             host,
             (i < cachedCountries.size()) ? QString::fromStdString(cachedCountries[i]) : QString(),
             "-",
             -1,
-            "-",
-            999999
+            normalizedStoredPingText(storedPingText, storedPingValue),
+            storedPingValue
         });
+    }
+
+    for (auto& favoriteServer : m_favoriteServers)
+    {
+        const int cachedIndex = cachedServerIndexByHost(favoriteServer.host);
+        if (cachedIndex < 0)
+        {
+            continue;
+        }
+
+        if (favoriteServer.country.isEmpty())
+        {
+            favoriteServer.country = m_cachedLiveServers[cachedIndex].country;
+        }
+        if (favoriteServer.ping == "-")
+        {
+            favoriteServer.ping = m_cachedLiveServers[cachedIndex].ping;
+            favoriteServer.pingValue = m_cachedLiveServers[cachedIndex].pingValue;
+        }
     }
 
     refreshServerListDisplay();
@@ -1810,39 +1917,55 @@ void KailleraNetplayDialog::saveServerList()
     std::vector<std::string> favoriteNames;
     std::vector<std::string> favoriteHosts;
     std::vector<std::string> favoriteCountries;
+    std::vector<std::string> favoritePings;
+    std::vector<std::string> favoritePingValues;
     favoriteNames.reserve(m_favoriteServers.size());
     favoriteHosts.reserve(m_favoriteServers.size());
     favoriteCountries.reserve(m_favoriteServers.size());
+    favoritePings.reserve(m_favoriteServers.size());
+    favoritePingValues.reserve(m_favoriteServers.size());
     for (const auto& server : m_favoriteServers)
     {
         favoriteNames.push_back(server.name.toStdString());
         favoriteHosts.push_back(server.host.toStdString());
         favoriteCountries.push_back(server.country.toStdString());
+        favoritePings.push_back(server.ping.toStdString());
+        favoritePingValues.push_back(QString::number(server.pingValue).toStdString());
     }
 
     std::vector<std::string> cachedNames;
     std::vector<std::string> cachedHosts;
     std::vector<std::string> cachedCountries;
+    std::vector<std::string> cachedPings;
+    std::vector<std::string> cachedPingValues;
     cachedNames.reserve(m_cachedLiveServers.size());
     cachedHosts.reserve(m_cachedLiveServers.size());
     cachedCountries.reserve(m_cachedLiveServers.size());
+    cachedPings.reserve(m_cachedLiveServers.size());
+    cachedPingValues.reserve(m_cachedLiveServers.size());
     for (const auto& server : m_cachedLiveServers)
     {
         cachedNames.push_back(server.name.toStdString());
         cachedHosts.push_back(server.host.toStdString());
         cachedCountries.push_back(server.country.toStdString());
+        cachedPings.push_back(server.ping.toStdString());
+        cachedPingValues.push_back(QString::number(server.pingValue).toStdString());
     }
 
     CoreSettingsSetValue(SettingsID::Kaillera_ServerListNames, favoriteNames);
     CoreSettingsSetValue(SettingsID::Kaillera_ServerListHosts, favoriteHosts);
     CoreSettingsSetValue(SettingsID::Kaillera_ServerListCountries, favoriteCountries);
+    CoreSettingsSetValue(SettingsID::Kaillera_ServerListPings, favoritePings);
+    CoreSettingsSetValue(SettingsID::Kaillera_ServerListPingValues, favoritePingValues);
     CoreSettingsSetValue(SettingsID::Kaillera_LiveServerCacheNames, cachedNames);
     CoreSettingsSetValue(SettingsID::Kaillera_LiveServerCacheHosts, cachedHosts);
     CoreSettingsSetValue(SettingsID::Kaillera_LiveServerCacheCountries, cachedCountries);
+    CoreSettingsSetValue(SettingsID::Kaillera_LiveServerCachePings, cachedPings);
+    CoreSettingsSetValue(SettingsID::Kaillera_LiveServerCachePingValues, cachedPingValues);
     CoreSettingsSave();
 }
 
-void KailleraNetplayDialog::refreshServerListDisplay()
+void KailleraNetplayDialog::refreshServerListDisplay(bool forcePingResort)
 {
     QString selectedHost;
     const int currentRow = m_serverTable->currentRow();
@@ -1870,7 +1993,8 @@ void KailleraNetplayDialog::refreshServerListDisplay()
         }
     }
 
-    const bool deferPingResort = (m_pingAllInProgress && m_serverSortColumn == 4);
+    const bool deferPingResort =
+        (m_pingAllInProgress && m_serverSortColumn == 4 && !forcePingResort);
     if (!deferPingResort && m_serverSortColumn != 0)
     {
         std::stable_sort(nonFavorites.begin(), nonFavorites.end(),
@@ -2025,6 +2149,12 @@ void KailleraNetplayDialog::fetchLiveServerList()
 
 void KailleraNetplayDialog::schedulePingAllServers()
 {
+    if (m_serverPingsSuspended)
+    {
+        m_pingAllQueued = false;
+        return;
+    }
+
     if (m_pingAllInProgress)
     {
         m_pingAllQueued = true;
@@ -2050,6 +2180,14 @@ void KailleraNetplayDialog::schedulePingAllServers()
 
 void KailleraNetplayDialog::pingAllServers()
 {
+    if (m_serverPingsSuspended)
+    {
+        m_pingAllInProgress = false;
+        m_pingAllQueued = false;
+        m_pendingPingHosts.clear();
+        return;
+    }
+
     m_pingAllInProgress = true;
     m_serverListNeedsRefresh = false;
     m_pendingPingHosts.clear();
@@ -2064,6 +2202,14 @@ void KailleraNetplayDialog::pingAllServers()
 
 void KailleraNetplayDialog::startNextServerPing()
 {
+    if (m_serverPingsSuspended)
+    {
+        m_pingAllInProgress = false;
+        m_pingAllQueued = false;
+        m_pendingPingHosts.clear();
+        return;
+    }
+
     if (m_pendingPingHosts.isEmpty())
     {
         m_pingAllInProgress = false;
@@ -2083,8 +2229,6 @@ void KailleraNetplayDialog::startNextServerPing()
     }
 
     m_activePingHost = m_pendingPingHosts.takeFirst();
-    updateServerPing(m_activePingHost, -2);
-
     QByteArray ipBytes;
     int port = 27888;
     const int colonIdx = m_activePingHost.lastIndexOf(':');
@@ -2110,6 +2254,38 @@ void KailleraNetplayDialog::startNextServerPing()
     {
         m_serverPingPollTimer->start();
     }
+}
+
+void KailleraNetplayDialog::stopServerPingQueue()
+{
+    m_pingAllQueued = false;
+    m_pingAllInProgress = false;
+    m_pendingPingHosts.clear();
+    m_activePingHost.clear();
+    if (m_serverPingPollTimer != nullptr)
+    {
+        m_serverPingPollTimer->stop();
+    }
+}
+
+void KailleraNetplayDialog::waitForActiveServerPing(bool applyResult)
+{
+    if (!m_activePingFuture.valid())
+    {
+        return;
+    }
+
+    while (m_activePingFuture.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready)
+    {
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    }
+
+    const int pingResult = m_activePingFuture.get();
+    if (applyResult && !m_activePingHost.isEmpty())
+    {
+        updateServerPing(m_activePingHost, pingResult);
+    }
+    m_activePingHost.clear();
 }
 
 void KailleraNetplayDialog::pollServerPing()
@@ -2492,6 +2668,42 @@ void KailleraNetplayDialog::refreshP2PStaticCodeDisplay()
     }
 }
 
+void KailleraNetplayDialog::showP2PCodeStatusMessage(const QString& message, const QColor& color)
+{
+    if (m_p2pCodeStatusLabel == nullptr)
+    {
+        return;
+    }
+
+    if (m_p2pCodeStatusTimer == nullptr)
+    {
+        m_p2pCodeStatusTimer = new QTimer(this);
+        m_p2pCodeStatusTimer->setSingleShot(true);
+        connect(m_p2pCodeStatusTimer, &QTimer::timeout, this, [this]() {
+            if (m_p2pCodeStatusLabel == nullptr)
+            {
+                return;
+            }
+
+            m_p2pCodeStatusLabel->clear();
+            m_p2pCodeStatusLabel->hide();
+        });
+    }
+
+    if (message.isEmpty())
+    {
+        m_p2pCodeStatusTimer->stop();
+        m_p2pCodeStatusLabel->clear();
+        m_p2pCodeStatusLabel->hide();
+        return;
+    }
+
+    m_p2pCodeStatusLabel->setStyleSheet(QString("color: %1; font-weight: 600;").arg(color.name()));
+    m_p2pCodeStatusLabel->setText(message);
+    m_p2pCodeStatusLabel->show();
+    m_p2pCodeStatusTimer->start(4000);
+}
+
 void KailleraNetplayDialog::cancelPendingP2PAutoClaim()
 {
     m_p2pAutoClaimAwaitingAck = false;
@@ -2695,6 +2907,7 @@ void KailleraNetplayDialog::onTabChanged(int index)
 void KailleraNetplayDialog::onConfigureP2PCode()
 {
     cancelPendingP2PAutoClaim();
+    showP2PCodeStatusMessage(QString(), QColor());
 
     const QString theme = QString::fromStdString(CoreSettingsGetStringValue(SettingsID::GUI_Theme));
     QString requested = currentP2PStaticCode();
@@ -2918,8 +3131,7 @@ void KailleraNetplayDialog::onConfigureP2PCode()
 
             if (confirmed)
             {
-                QMessageBox::information(this, "Configure P2P Code",
-                    "Your connect code is now " + code + ".");
+                showP2PCodeStatusMessage("Connect code updated to " + code + ".", QColor("#2E7D32"));
             }
             else
             {
@@ -3088,6 +3300,7 @@ void KailleraNetplayDialog::onServerRightClicked(QPoint pos)
         actMoveDown->setEnabled(favoriteIndex + 1 < m_favoriteServers.size());
         menu.addSeparator();
     }
+    QAction* actCopyIp = menu.addAction("Copy IP");
     QAction* actPing = menu.addAction("Ping");
     QAction* actTraceroute = menu.addAction("Traceroute");
 
@@ -3109,6 +3322,10 @@ void KailleraNetplayDialog::onServerRightClicked(QPoint pos)
     else if (chosen == actMoveDown)
     {
         moveFavoriteServer(favoriteIndex, 1);
+    }
+    else if (chosen == actCopyIp)
+    {
+        QApplication::clipboard()->setText(entry.host.section(':', 0, 0));
     }
     else if (chosen == actPing)
     {
@@ -3181,10 +3398,18 @@ void KailleraNetplayDialog::onWaitingGamesReply(QNetworkReply* reply)
     wgDialog->setWindowTitle("Waiting Games");
     wgDialog->setMinimumSize(600, 400);
     wgDialog->resize(700, 450);
+    const QString theme = QString::fromStdString(CoreSettingsGetStringValue(SettingsID::GUI_Theme));
+    if (theme == "Modern")
+    {
+        wgDialog->setObjectName("KailleraLauncherDialog");
+        wgDialog->setStyleSheet(buildLauncherStyleSheet(theme));
+    }
 
     auto* wgLayout = new QVBoxLayout(wgDialog);
 
     auto* wgTable = new QTableWidget(0, 5, wgDialog);
+    wgTable->setObjectName("KailleraSurface");
+    wgTable->setProperty("launcherWaitingGamesTable", true);
     wgTable->setHorizontalHeaderLabels({"Game", "Emulator", "User", "Server", "IP"});
     wgTable->horizontalHeader()->setStretchLastSection(true);
     wgTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -3192,6 +3417,8 @@ void KailleraNetplayDialog::onWaitingGamesReply(QNetworkReply* reply)
     wgTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     wgTable->setSortingEnabled(true);
     wgTable->horizontalHeader()->setMinimumSectionSize(16);
+    wgTable->verticalHeader()->setVisible(false);
+    wgTable->setShowGrid(false);
     applyNoAccentStyle(wgTable);
     installHeaderDoubleClickSortToggle(wgTable);
     wgLayout->addWidget(wgTable);
@@ -3199,6 +3426,13 @@ void KailleraNetplayDialog::onWaitingGamesReply(QNetworkReply* reply)
     auto* wgBtnLayout = new QHBoxLayout();
     auto* btnAddToList = new QPushButton("Favorite Server", wgDialog);
     auto* btnWgClose = new QPushButton("Close", wgDialog);
+    if (theme == "Modern")
+    {
+        btnAddToList->setObjectName("KailleraSecondaryButton");
+        btnWgClose->setObjectName("KailleraSecondaryButton");
+        configureLauncherButtonMetrics(btnAddToList);
+        configureLauncherButtonMetrics(btnWgClose);
+    }
     wgBtnLayout->addWidget(btnAddToList);
     wgBtnLayout->addStretch();
     wgBtnLayout->addWidget(btnWgClose);
@@ -3261,6 +3495,13 @@ void KailleraNetplayDialog::onConnectServer()
     if (row < 0 || row >= m_displayServers.size()) return;
     const ServerEntry& entry = m_displayServers[row];
 
+    // Browser pings use the same legacy socket registry as connect/login.
+    // Drain them before starting a server session to avoid cross-thread
+    // overlap in the n02 networking layer.
+    m_serverPingsSuspended = true;
+    stopServerPingQueue();
+    waitForActiveServerPing(false);
+
     // Parse host:port
     QString hostStr = entry.host;
     QByteArray ipBytes;
@@ -3320,25 +3561,39 @@ void KailleraNetplayDialog::onConnectServer()
         progress.show();
 
         // Poll until the future completes or user cancels
-        while (connectFuture.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready)
+        while (connectFuture.wait_for(std::chrono::milliseconds(kConnectPollIntervalMs)) != std::future_status::ready)
         {
             QApplication::processEvents();
             if (progress.wasCanceled())
             {
                 // Can't cancel the blocking socket wait, so keep processing events until it finishes
-                while (connectFuture.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready)
+                while (connectFuture.wait_for(std::chrono::milliseconds(kConnectPollIntervalMs)) != std::future_status::ready)
                     QApplication::processEvents();
                 kaillera_core_cleanup();
                 if (stateTimerWasRunning && m_stateMachineTimer != nullptr)
                 {
                     m_stateMachineTimer->start(1);
                 }
+                m_serverPingsSuspended = false;
+                schedulePingAllServers();
                 return;
             }
         }
-        progress.close();
-
         const bool connected = connectFuture.get();
+        std::unique_ptr<KailleraServerBrowserDialog> browser;
+        if (connected)
+        {
+            // Construct the browser before finishing login so it receives the
+            // initial LONGSUCC lobby population callbacks.
+            browser = std::make_unique<KailleraServerBrowserDialog>(entry.name, nullptr);
+
+            // Finish the login speed test before handing control back to the
+            // Qt timer. The old Win32 client effectively kept polling here,
+            // which let the server measure the true join RTT instead of a
+            // timer-paced ACK cadence.
+            kaillera_core_finish_login(1000);
+        }
+        progress.close();
         if (stateTimerWasRunning && m_stateMachineTimer != nullptr)
         {
             m_stateMachineTimer->start(1);
@@ -3351,20 +3606,25 @@ void KailleraNetplayDialog::onConnectServer()
 
             // Open the server browser dialog as a standalone top-level window
             // so it doesn't stay on top of the emulator frame
-            KailleraServerBrowserDialog browser(entry.name, nullptr);
-            browser.show();
+            browser->show();
 
             QEventLoop loop;
-            connect(&browser, &QDialog::finished, &loop, &QEventLoop::quit);
+            connect(browser.get(), &QDialog::finished, &loop, &QEventLoop::quit);
             loop.exec();
             // Browser dialog handles disconnect/cleanup on close
 
             // Re-show the netplay dialog, unless the main window
             // is closing (user clicked X on the emulator window)
             if (parentWidget() && parentWidget()->isVisible())
+            {
                 show();
+                m_serverPingsSuspended = false;
+                schedulePingAllServers();
+            }
             else
+            {
                 accept();
+            }
         }
         else
         {
@@ -3376,11 +3636,15 @@ void KailleraNetplayDialog::onConnectServer()
             }
             QMessageBox::warning(this, "Connection Error",
                                  errorMsg + "\n\nServer: " + entry.name);
+            m_serverPingsSuspended = false;
+            schedulePingAllServers();
         }
     }
     else
     {
         QMessageBox::warning(this, "Connection Error", "Failed to initialize Kaillera core.");
+        m_serverPingsSuspended = false;
+        schedulePingAllServers();
     }
 }
 
