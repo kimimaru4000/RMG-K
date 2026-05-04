@@ -10,7 +10,7 @@
 #include "KailleraServerBrowserDialog.hpp"
 #include "KailleraTableStyle.hpp"
 
-#ifdef _WIN32
+#ifdef NETPLAY
 
 #include "../../KailleraUIBridge.hpp"
 #include "KailleraOptionsDialog.hpp"
@@ -41,7 +41,8 @@
 #include <QToolButton>
 #include <QListWidgetItem>
 #include <QMouseEvent>
-#include <windows.h>
+#include <QProxyStyle>
+#include <QStyle>
 
 namespace
 {
@@ -467,7 +468,7 @@ public:
 };
 
 KailleraServerBrowserDialog::KailleraServerBrowserDialog(const QString& serverName, QWidget* parent)
-    : QDialog(parent)
+    : QDialog(parent, Qt::Window)
     , m_serverName(serverName)
 {
     setWindowIcon(QIcon(":Resource/Kaillera.svg"));
@@ -985,6 +986,7 @@ void KailleraServerBrowserDialog::setupUI()
     m_lobbyChat->setObjectName("KailleraSurface");
     m_lobbyChat->setReadOnly(true);
     m_lobbyChat->setOpenExternalLinks(true);
+    m_lobbyChat->document()->setMaximumBlockCount(2000);
     lobbyBodyLayout->addWidget(m_lobbyChat);
 
     auto* lobbyComposer = new QWidget(lobbyBody);
@@ -1075,6 +1077,7 @@ void KailleraServerBrowserDialog::setupUI()
     m_userTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Interactive);
     m_userTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Interactive);
     m_userTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    m_userTable->verticalHeader()->setDefaultSectionSize(24);
     m_userTable->verticalHeader()->setVisible(false);
     m_userTable->setShowGrid(false);
     m_userTable->setAlternatingRowColors(true);
@@ -1287,6 +1290,7 @@ QWidget* KailleraServerBrowserDialog::createGameRoomWidget()
     m_gameChat->setObjectName("KailleraSurface");
     m_gameChat->setReadOnly(true);
     m_gameChat->setOpenExternalLinks(true);
+    m_gameChat->document()->setMaximumBlockCount(1000);
     chatVBox->addWidget(m_gameChat);
 
     // Game chat input + send
@@ -2718,19 +2722,13 @@ void KailleraServerBrowserDialog::onPlayerJoined(QString name, int ping, unsigne
     // Beep on player join
     if (CoreSettingsGetBoolValue(SettingsID::Kaillera_BeepOnJoin))
     {
-        MessageBeep(MB_OK);
+        QApplication::beep();
     }
 
     // Flash taskbar if dialog not focused
     if (CoreSettingsGetBoolValue(SettingsID::Kaillera_FlashOnJoin) && !isActiveWindow())
     {
-        FLASHWINFO fwi = {};
-        fwi.cbSize = sizeof(fwi);
-        fwi.hwnd = reinterpret_cast<HWND>(winId());
-        fwi.dwFlags = FLASHW_TIMERNOFG | FLASHW_TRAY;
-        fwi.uCount = 0;
-        fwi.dwTimeout = 0;
-        FlashWindowEx(&fwi);
+        QApplication::alert(this);
     }
 }
 
@@ -3217,4 +3215,4 @@ void KailleraServerBrowserDialog::onStatsTimer()
 
 }
 
-#endif // _WIN32
+#endif // NETPLAY

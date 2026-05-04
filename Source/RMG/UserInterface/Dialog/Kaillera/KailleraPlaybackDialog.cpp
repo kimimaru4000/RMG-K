@@ -10,7 +10,7 @@
 #include "KailleraPlaybackDialog.hpp"
 #include "KailleraTableStyle.hpp"
 
-#ifdef _WIN32
+#ifdef NETPLAY
 
 #include <RMG-Core/Kaillera.hpp>
 #include <RMG-Core/Emulation.hpp>
@@ -61,7 +61,7 @@ void KailleraPlaybackDialog::setupUI()
     setMinimumSize(520, 400);
     resize(580, 450);
 
-    setStyleSheet("QTableWidget::item:selected { background-color: #0078D7; color: white; }");
+    setStyleSheet("QTableWidget::item:selected { background-color: rgba(0, 120, 215, 0.45); color: white; }");
 
     auto* mainLayout = new QVBoxLayout(this);
 
@@ -540,4 +540,4 @@ void KailleraPlaybackDialog::onPlaybackDoubleClicked(int row, int column)
     }
 }
 
-#endif // _WIN32
+#endif // NETPLAY

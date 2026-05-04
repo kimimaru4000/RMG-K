@@ -14,7 +14,7 @@
 #include "KailleraTableStyle.hpp"
 #include "KailleraWaitingGamesDialog.hpp"
 
-#ifdef _WIN32
+#ifdef NETPLAY
 
 #include "../../KailleraUIBridge.hpp"
 
@@ -62,22 +62,23 @@
 #include <QProxyStyle>
 #include <QStyledItemDelegate>
 #include <QStringList>
+#include <QMainWindow>
+#include <QPlainTextEdit>
 
 #include <chrono>
 #include <cstring>
 #include <ctime>
 #include <fstream>
 #include <future>
+#include <memory>
 #include <algorithm>
-
-#include <windows.h>
 
 static constexpr int kMaxP2PRecentEntries = 12;
 
 namespace {
 
 static constexpr int kMaxTraversalDigits = 3;
-
+static constexpr int kConnectPollIntervalMs = 1;
 int parseStoredPingValue(const QString& storedPingText, const QString& storedPingValueText)
 {
     bool ok = false;
@@ -1284,7 +1285,7 @@ static QString buildLauncherStyleSheet(const QString& theme)
 }
 
 KailleraNetplayDialog::KailleraNetplayDialog(QWidget* parent)
-    : QDialog(parent)
+    : QDialog(parent, Qt::Window)
 {
     setWindowIcon(QIcon(":Resource/Kaillera.svg"));
     m_netManager = new QNetworkAccessManager(this);
@@ -1301,6 +1302,7 @@ KailleraNetplayDialog::KailleraNetplayDialog(QWidget* parent)
     // This replaces the blocking while-loop in n02::selectServerDialog()
     n02::setStateInput(0);
     m_stateMachineTimer = new QTimer(this);
+    m_stateMachineTimer->setTimerType(Qt::PreciseTimer);
     connect(m_stateMachineTimer, &QTimer::timeout, this, &KailleraNetplayDialog::onStateMachineTimer);
     m_stateMachineTimer->start(1);
 
@@ -1404,7 +1406,7 @@ QWidget* KailleraNetplayDialog::createServerTab()
     m_serverTable = new QTableWidget(0, 6, tablePane);
     m_serverTable->setObjectName("KailleraSurface");
     m_serverTable->setProperty("launcherServerTable", true);
-    m_serverTable->setHorizontalHeaderLabels({"*", "Name", "Country", "Players", "Ping", "IP"});
+    m_serverTable->setHorizontalHeaderLabels({"*", "Name", "Region", "Players", "Ping", "IP"});
     m_serverTable->verticalHeader()->setVisible(false);
     m_serverTable->setShowGrid(false);
     m_serverTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -1767,12 +1769,13 @@ void KailleraNetplayDialog::loadSettings()
     std::string username = CoreSettingsGetStringValue(SettingsID::Kaillera_Username);
     if (username.empty())
     {
-        // Fallback to Windows username
-        char winUser[32];
-        DWORD size = sizeof(winUser);
-        if (GetUserNameA(winUser, &size))
+        // Fallback to OS username
+        QByteArray envUser = qgetenv("USER");
+        if (envUser.isEmpty())
+            envUser = qgetenv("USERNAME");
+        if (!envUser.isEmpty())
         {
-            username = winUser;
+            username = envUser.toStdString();
         }
         else
         {
@@ -1781,8 +1784,9 @@ void KailleraNetplayDialog::loadSettings()
     }
     m_usernameEdit->setText(QString::fromStdString(username));
 
-    // Load frame delay
-    int frameDelay = CoreSettingsGetIntValue(SettingsID::Kaillera_SpoofPing);
+    // Load the server-mode frame-delay selection.
+    // This is a dropdown index (Auto, 1-9 frames), not a raw spoof-ping value.
+    int frameDelay = CoreSettingsGetIntValue(SettingsID::Kaillera_FrameDelay);
     if (frameDelay < 0 || frameDelay > 9) frameDelay = 0;
     m_frameDelayCombo->setCurrentIndex(frameDelay);
 
@@ -1804,7 +1808,7 @@ void KailleraNetplayDialog::saveSettings()
 {
     CoreSettingsSetValue(SettingsID::Kaillera_Username,
                          m_usernameEdit->text().toStdString());
-    CoreSettingsSetValue(SettingsID::Kaillera_SpoofPing,
+    CoreSettingsSetValue(SettingsID::Kaillera_FrameDelay,
                          m_frameDelayCombo->currentIndex());
 
     // Tab order: 0=Server, 1=P2P
@@ -2146,6 +2150,12 @@ void KailleraNetplayDialog::fetchLiveServerList()
 
 void KailleraNetplayDialog::schedulePingAllServers()
 {
+    if (m_serverPingsSuspended)
+    {
+        m_pingAllQueued = false;
+        return;
+    }
+
     if (m_pingAllInProgress)
     {
         m_pingAllQueued = true;
@@ -2171,6 +2181,14 @@ void KailleraNetplayDialog::schedulePingAllServers()
 
 void KailleraNetplayDialog::pingAllServers()
 {
+    if (m_serverPingsSuspended)
+    {
+        m_pingAllInProgress = false;
+        m_pingAllQueued = false;
+        m_pendingPingHosts.clear();
+        return;
+    }
+
     m_pingAllInProgress = true;
     m_serverListNeedsRefresh = false;
     m_pendingPingHosts.clear();
@@ -2185,6 +2203,14 @@ void KailleraNetplayDialog::pingAllServers()
 
 void KailleraNetplayDialog::startNextServerPing()
 {
+    if (m_serverPingsSuspended)
+    {
+        m_pingAllInProgress = false;
+        m_pingAllQueued = false;
+        m_pendingPingHosts.clear();
+        return;
+    }
+
     if (m_pendingPingHosts.isEmpty())
     {
         m_pingAllInProgress = false;
@@ -2229,6 +2255,38 @@ void KailleraNetplayDialog::startNextServerPing()
     {
         m_serverPingPollTimer->start();
     }
+}
+
+void KailleraNetplayDialog::stopServerPingQueue()
+{
+    m_pingAllQueued = false;
+    m_pingAllInProgress = false;
+    m_pendingPingHosts.clear();
+    m_activePingHost.clear();
+    if (m_serverPingPollTimer != nullptr)
+    {
+        m_serverPingPollTimer->stop();
+    }
+}
+
+void KailleraNetplayDialog::waitForActiveServerPing(bool applyResult)
+{
+    if (!m_activePingFuture.valid())
+    {
+        return;
+    }
+
+    while (m_activePingFuture.wait_for(std::chrono::milliseconds(1)) != std::future_status::ready)
+    {
+        QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    }
+
+    const int pingResult = m_activePingFuture.get();
+    if (applyResult && !m_activePingHost.isEmpty())
+    {
+        updateServerPing(m_activePingHost, pingResult);
+    }
+    m_activePingHost.clear();
 }
 
 void KailleraNetplayDialog::pollServerPing()
@@ -3243,6 +3301,7 @@ void KailleraNetplayDialog::onServerRightClicked(QPoint pos)
         actMoveDown->setEnabled(favoriteIndex + 1 < m_favoriteServers.size());
         menu.addSeparator();
     }
+    QAction* actCopyIp = menu.addAction("Copy IP");
     QAction* actPing = menu.addAction("Ping");
     QAction* actTraceroute = menu.addAction("Traceroute");
 
@@ -3264,6 +3323,10 @@ void KailleraNetplayDialog::onServerRightClicked(QPoint pos)
     else if (chosen == actMoveDown)
     {
         moveFavoriteServer(favoriteIndex, 1);
+    }
+    else if (chosen == actCopyIp)
+    {
+        QApplication::clipboard()->setText(entry.host.section(':', 0, 0));
     }
     else if (chosen == actPing)
     {
@@ -3291,13 +3354,50 @@ void KailleraNetplayDialog::onServerRightClicked(QPoint pos)
     }
     else if (chosen == actTraceroute)
     {
-        // Extract IP (strip port)
         const QString ip = entry.host.split(':').first();
+#ifdef Q_OS_WIN
+        const QString traceCmd = QStringLiteral("tracert");
+#else
+        const QString traceCmd = QStringLiteral("traceroute");
+#endif
 
-        // Launch tracert in a new console window
-        QString cmd = "cmd.exe /c \"tracert " + ip + " & pause\"";
-        QByteArray cmdBytes = cmd.toLocal8Bit();
-        WinExec(cmdBytes.constData(), SW_SHOW);
+        auto* dlg = new QDialog(this);
+        dlg->setWindowTitle("Traceroute - " + ip);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->resize(600, 400);
+
+        auto* layout = new QVBoxLayout(dlg);
+        auto* output = new QPlainTextEdit(dlg);
+        output->setReadOnly(true);
+        QFont monoFont("monospace");
+        monoFont.setStyleHint(QFont::Monospace);
+        output->setFont(monoFont);
+        layout->addWidget(output);
+
+        auto* proc = new QProcess(dlg);
+        proc->setProcessChannelMode(QProcess::MergedChannels);
+        connect(proc, &QProcess::readyReadStandardOutput, dlg, [proc, output]() {
+            output->moveCursor(QTextCursor::End);
+            output->insertPlainText(QString::fromLocal8Bit(proc->readAllStandardOutput()));
+            output->ensureCursorVisible();
+        });
+        connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+                dlg, [output](int exitCode, QProcess::ExitStatus) {
+            output->moveCursor(QTextCursor::End);
+            output->insertPlainText(QString("\n--- Finished (exit code %1) ---\n").arg(exitCode));
+            output->ensureCursorVisible();
+        });
+        connect(proc, &QProcess::errorOccurred, dlg, [output](QProcess::ProcessError error) {
+            if (error == QProcess::FailedToStart) {
+                output->moveCursor(QTextCursor::End);
+                output->insertPlainText("Error: Could not start traceroute. Is it installed?\n");
+                output->ensureCursorVisible();
+            }
+        });
+
+        output->insertPlainText("$ " + traceCmd + " " + ip + "\n\n");
+        proc->start(traceCmd, QStringList() << ip);
+        dlg->show();
     }
 }
 
@@ -3433,6 +3533,13 @@ void KailleraNetplayDialog::onConnectServer()
     if (row < 0 || row >= m_displayServers.size()) return;
     const ServerEntry& entry = m_displayServers[row];
 
+    // Browser pings use the same legacy socket registry as connect/login.
+    // Drain them before starting a server session to avoid cross-thread
+    // overlap in the n02 networking layer.
+    m_serverPingsSuspended = true;
+    stopServerPingQueue();
+    waitForActiveServerPing(false);
+
     // Parse host:port
     QString hostStr = entry.host;
     QByteArray ipBytes;
@@ -3492,25 +3599,39 @@ void KailleraNetplayDialog::onConnectServer()
         progress.show();
 
         // Poll until the future completes or user cancels
-        while (connectFuture.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready)
+        while (connectFuture.wait_for(std::chrono::milliseconds(kConnectPollIntervalMs)) != std::future_status::ready)
         {
             QApplication::processEvents();
             if (progress.wasCanceled())
             {
                 // Can't cancel the blocking socket wait, so keep processing events until it finishes
-                while (connectFuture.wait_for(std::chrono::milliseconds(50)) != std::future_status::ready)
+                while (connectFuture.wait_for(std::chrono::milliseconds(kConnectPollIntervalMs)) != std::future_status::ready)
                     QApplication::processEvents();
                 kaillera_core_cleanup();
                 if (stateTimerWasRunning && m_stateMachineTimer != nullptr)
                 {
                     m_stateMachineTimer->start(1);
                 }
+                m_serverPingsSuspended = false;
+                schedulePingAllServers();
                 return;
             }
         }
-        progress.close();
-
         const bool connected = connectFuture.get();
+        std::unique_ptr<KailleraServerBrowserDialog> browser;
+        if (connected)
+        {
+            // Construct the browser before finishing login so it receives the
+            // initial LONGSUCC lobby population callbacks.
+            browser = std::make_unique<KailleraServerBrowserDialog>(entry.name, nullptr);
+
+            // Finish the login speed test before handing control back to the
+            // Qt timer. The old Win32 client effectively kept polling here,
+            // which let the server measure the true join RTT instead of a
+            // timer-paced ACK cadence.
+            kaillera_core_finish_login(1000);
+        }
+        progress.close();
         if (stateTimerWasRunning && m_stateMachineTimer != nullptr)
         {
             m_stateMachineTimer->start(1);
@@ -3523,20 +3644,36 @@ void KailleraNetplayDialog::onConnectServer()
 
             // Open the server browser dialog as a standalone top-level window
             // so it doesn't stay on top of the emulator frame
-            KailleraServerBrowserDialog browser(entry.name, nullptr);
-            browser.show();
+            browser->show();
 
             QEventLoop loop;
-            connect(&browser, &QDialog::finished, &loop, &QEventLoop::quit);
+            connect(browser.get(), &QDialog::finished, &loop, &QEventLoop::quit);
             loop.exec();
             // Browser dialog handles disconnect/cleanup on close
 
             // Re-show the netplay dialog, unless the main window
-            // is closing (user clicked X on the emulator window)
-            if (parentWidget() && parentWidget()->isVisible())
+            // is closing (user clicked X on the emulator window).
+            // The dialog has no Qt parent (nullptr) to avoid Linux
+            // window-stacking issues, so check the active windows instead.
+            bool mainWindowAlive = false;
+            for (QWidget* w : QApplication::topLevelWidgets())
+            {
+                if (qobject_cast<QMainWindow*>(w) && w->isVisible())
+                {
+                    mainWindowAlive = true;
+                    break;
+                }
+            }
+            if (mainWindowAlive)
+            {
                 show();
+                m_serverPingsSuspended = false;
+                schedulePingAllServers();
+            }
             else
+            {
                 accept();
+            }
         }
         else
         {
@@ -3548,11 +3685,15 @@ void KailleraNetplayDialog::onConnectServer()
             }
             QMessageBox::warning(this, "Connection Error",
                                  errorMsg + "\n\nServer: " + entry.name);
+            m_serverPingsSuspended = false;
+            schedulePingAllServers();
         }
     }
     else
     {
         QMessageBox::warning(this, "Connection Error", "Failed to initialize Kaillera core.");
+        m_serverPingsSuspended = false;
+        schedulePingAllServers();
     }
 }
 
@@ -4089,4 +4230,4 @@ void KailleraNetplayDialog::onP2PWaitingGames()
     onP2PJoin();
 }
 
-#endif // _WIN32
+#endif // NETPLAY
