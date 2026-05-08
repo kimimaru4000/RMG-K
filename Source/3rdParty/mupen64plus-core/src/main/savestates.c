@@ -29,6 +29,7 @@
 #include <SDL.h>
 #include <SDL_thread.h>
 #endif
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -218,9 +219,11 @@ static int savestates_load_m64p(struct device* dev, char *filepath)
     unsigned int version;
     int i;
     uint32_t FCR31;
+    uint64_t rollback_load_start = 0;
 
     size_t savestateSize;
     unsigned char *savestateData, *curr;
+    int free_savestate_data = 1;
     char queue[1024];
     unsigned char using_tlb_data[4];
     unsigned char data_0001_0200[4096]; // 4k for extra state from v1.2
@@ -249,6 +252,7 @@ static int savestates_load_m64p(struct device* dev, char *filepath)
         }
         memcpy(header, memory_data, 44);
         memory_offset = 44;
+        rollback_load_start = SDL_GetPerformanceCounter();
         curr = header;
     }
     else
@@ -307,15 +311,6 @@ static int savestates_load_m64p(struct device* dev, char *filepath)
 
     /* Read the rest of the savestate */
     savestateSize = 16788244;
-    savestateData = curr = (unsigned char *)malloc(savestateSize);
-    if (savestateData == NULL)
-    {
-        main_message(M64MSG_STATUS, OSD_BOTTOM_LEFT, "Insufficient memory to load state.");
-        if (f != NULL)
-            gzclose(f);
-        SDL_UnlockMutex(savestates_lock);
-        return 0;
-    }
     if (memory_data != NULL)
     {
         size_t required_size = savestateSize;
@@ -329,12 +324,35 @@ static int savestates_load_m64p(struct device* dev, char *filepath)
         if (memory_size - memory_offset < required_size)
         {
             main_message(M64MSG_STATUS, OSD_BOTTOM_LEFT, "Rollback state data is incomplete.");
-            free(savestateData);
             SDL_UnlockMutex(savestates_lock);
             return 0;
         }
 
+#if defined(M64P_BIG_ENDIAN)
+        savestateData = curr = (unsigned char *)malloc(savestateSize);
+#else
+        savestateData = curr = memory_data + memory_offset;
+        free_savestate_data = 0;
+#endif
+    }
+    else
+    {
+        savestateData = curr = (unsigned char *)malloc(savestateSize);
+    }
+
+    if (savestateData == NULL)
+    {
+        main_message(M64MSG_STATUS, OSD_BOTTOM_LEFT, "Insufficient memory to load state.");
+        if (f != NULL)
+            gzclose(f);
+        SDL_UnlockMutex(savestates_lock);
+        return 0;
+    }
+    if (memory_data != NULL)
+    {
+#if defined(M64P_BIG_ENDIAN)
         memcpy(savestateData, memory_data + memory_offset, savestateSize);
+#endif
         memory_offset += savestateSize;
         memcpy(queue, memory_data + memory_offset, sizeof(queue));
         memory_offset += sizeof(queue);
@@ -1049,8 +1067,19 @@ static int savestates_load_m64p(struct device* dev, char *filepath)
 
     *r4300_cp0_last_addr(&dev->r4300.cp0) = *r4300_pc(&dev->r4300);
 
-    free(savestateData);
-    main_message(M64MSG_STATUS, OSD_BOTTOM_LEFT, "State loaded from: %s", namefrompath(filepath));
+    if (free_savestate_data)
+        free(savestateData);
+    if (memory_data != NULL)
+    {
+        uint64_t rollback_load_end = SDL_GetPerformanceCounter();
+        uint64_t rollback_load_frequency = SDL_GetPerformanceFrequency();
+        uint64_t rollback_load_us = ((rollback_load_end - rollback_load_start) * 1000000) / rollback_load_frequency;
+        main_message(M64MSG_STATUS, OSD_BOTTOM_LEFT, "Rollback core load in %" PRIu64 " us", rollback_load_us);
+    }
+    else
+    {
+        main_message(M64MSG_STATUS, OSD_BOTTOM_LEFT, "State loaded from: %s", namefrompath(filepath));
+    }
     return 1;
 }
 

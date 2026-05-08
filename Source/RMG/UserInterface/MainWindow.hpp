@@ -101,7 +101,6 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
     bool ui_ManuallySavedState  = false;
     bool ui_ManuallyLoadedState = false;
     bool ui_RollbackLoadPending = false;
-    std::chrono::steady_clock::time_point ui_RollbackLoadStartTime;
 
     bool ui_ForceClose = false;
 

@@ -3957,10 +3957,7 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
                 }
                 else
                 {
-                    auto end = std::chrono::steady_clock::now();
-                    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end - this->ui_RollbackLoadStartTime);
-                    std::string message = "Rollback loaded in " + std::to_string(duration.count()) + " us";
-                    OnScreenDisplaySetMessage(message);
+                    // The core prints the actual rollback restore time. Avoid replacing it with queue wait time.
                 }
 
                 this->ui_ManuallyLoadedState = false;
@@ -4049,7 +4046,6 @@ void MainWindow::on_Action_Rollback_SaveState(void)
 void MainWindow::on_Action_Rollback_LoadState(void)
 {
     this->ui_RollbackLoadPending = true;
-    this->ui_RollbackLoadStartTime = std::chrono::steady_clock::now();
 
     if (!CoreLoadRollbackState())
     {
