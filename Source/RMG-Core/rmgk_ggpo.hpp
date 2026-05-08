@@ -17,10 +17,12 @@ class rmgk_ggpo
 {
   public:
     using SynchronizeInputCallback = bool (*)(void* values, int size, int players, void* userData);
+    using AdvanceFrameCallback = bool (*)(int flags, void* userData);
 
     struct SessionCallbacks
     {
         SynchronizeInputCallback synchronize_input = nullptr;
+        AdvanceFrameCallback advance_frame = nullptr;
     };
 
     static bool start_session(const SessionCallbacks& callbacks, void* userData);
