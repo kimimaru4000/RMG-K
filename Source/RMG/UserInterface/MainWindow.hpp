@@ -147,6 +147,8 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
     QString ui_NetplayChatInput;
     bool ui_RollbackLivePumpPending = false;
     bool ui_RollbackLivePumpActive = false;
+    bool ui_RollbackNetplayRoomActive = false;
+    bool ui_RollbackNetplayLaunchActive = false;
     struct PendingLocalChatEcho
     {
         QString message;

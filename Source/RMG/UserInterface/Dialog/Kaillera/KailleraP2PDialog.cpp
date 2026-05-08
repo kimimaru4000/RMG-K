@@ -1240,6 +1240,11 @@ void KailleraP2PDialog::onGameStarted(QString game, int player, int maxPlayers)
 {
     if (m_rollbackMode)
     {
+        if (m_detachedForRollback)
+        {
+            return;
+        }
+
         char peerIp[128] = {};
         int peerPort = 0;
         const int localPort = p2p_core_get_port();

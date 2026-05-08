@@ -3207,6 +3207,7 @@ void KailleraNetplayDialog::onRollbackHost()
         QMessageBox::warning(this, "Rollback Host", "Failed to initialize P2P room.");
         return;
     }
+    emit rollbackSessionPreparing();
 
     const bool stateTimerWasRunning =
         (m_stateMachineTimer != nullptr && m_stateMachineTimer->isActive());
@@ -3222,6 +3223,10 @@ void KailleraNetplayDialog::onRollbackHost()
     KailleraP2PDialog p2pDialog(true, gameName, username, QString(), nullptr, true);
     connect(&p2pDialog, &KailleraP2PDialog::rollbackSessionReady, this,
         [this, &rollbackLaunched](QString game, QString remoteAddress, int localPort, int remotePort, int localPlayer, int frameDelay) {
+            if (rollbackLaunched)
+            {
+                return;
+            }
             rollbackLaunched = true;
             emit rollbackSessionRequested(game, remoteAddress, localPort, remotePort, localPlayer, frameDelay);
         },
@@ -3310,6 +3315,7 @@ void KailleraNetplayDialog::onRollbackJoin()
         QMessageBox::warning(this, "Rollback Connect", "Failed to connect to host: " + addrText);
         return;
     }
+    emit rollbackSessionPreparing();
 
     hide();
 
@@ -3323,6 +3329,10 @@ void KailleraNetplayDialog::onRollbackJoin()
         Qt::QueuedConnection);
     connect(&p2pDialog, &KailleraP2PDialog::rollbackSessionReady, this,
         [this, &rollbackLaunched](QString game, QString remoteAddress, int localPort, int remotePort, int localPlayer, int frameDelay) {
+            if (rollbackLaunched)
+            {
+                return;
+            }
             rollbackLaunched = true;
             emit rollbackSessionRequested(game, remoteAddress, localPort, remotePort, localPlayer, frameDelay);
         },

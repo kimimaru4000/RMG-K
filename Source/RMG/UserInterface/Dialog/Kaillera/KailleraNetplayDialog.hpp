@@ -48,6 +48,7 @@ public:
     ~KailleraNetplayDialog() override;
 
 signals:
+    void rollbackSessionPreparing();
     void rollbackSessionRequested(QString gameName, QString remoteAddress, int localPort, int remotePort, int localPlayer, int frameDelay);
 
 private slots:

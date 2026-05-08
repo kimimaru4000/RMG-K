@@ -3534,6 +3534,10 @@ void MainWindow::on_Action_Netplay_BrowseSessions(void)
     // Connect signals
     connect(this->kailleraSessionManager, &KailleraSessionManager::gameStarted,
             this, &MainWindow::on_Kaillera_GameStarted);
+    connect(this->kailleraSessionManager, &KailleraSessionManager::rollbackSessionPreparing,
+            this, [this]() {
+                this->ui_RollbackNetplayRoomActive = true;
+            });
     connect(this->kailleraSessionManager, &KailleraSessionManager::rollbackSessionRequested,
             this, &MainWindow::on_Rollback_SessionRequested);
     connect(this->kailleraSessionManager, &KailleraSessionManager::chatReceived,
@@ -3561,6 +3565,10 @@ void MainWindow::on_Action_Netplay_BrowseSessions(void)
     // When they start a game, gameStarted signal will be emitted
     // Dialog stays open until user closes it
     this->kailleraSessionManager->showServerDialog();
+    if (!this->ui_RollbackNetplayLaunchActive)
+    {
+        this->ui_RollbackNetplayRoomActive = false;
+    }
 
     // Dialog closed - clean up Kaillera session
     // (emulation may still be running - user can manually stop it)
@@ -3602,6 +3610,11 @@ void MainWindow::on_Action_Netplay_ViewSession(void)
 #ifdef NETPLAY
 void MainWindow::on_Kaillera_GameStarted(QString gameName, int playerNum, int totalPlayers)
 {
+    if (this->ui_RollbackNetplayRoomActive || this->ui_RollbackNetplayLaunchActive)
+    {
+        return;
+    }
+
     // Find ROM file by game name
     QString romFile = this->findRomByName(gameName);
     if (romFile.isEmpty())
@@ -3634,6 +3647,11 @@ void MainWindow::on_Kaillera_GameStarted(QString gameName, int playerNum, int to
 
 void MainWindow::on_Rollback_SessionRequested(QString gameName, QString remoteAddress, int localPort, int remotePort, int localPlayer, int frameDelay)
 {
+    if (this->ui_RollbackNetplayLaunchActive)
+    {
+        return;
+    }
+
     QString romFile = this->findRomByName(gameName);
     if (romFile.isEmpty())
     {
@@ -3652,6 +3670,8 @@ void MainWindow::on_Rollback_SessionRequested(QString gameName, QString remoteAd
             });
         return;
     }
+
+    this->ui_RollbackNetplayLaunchActive = true;
 
     if (this->ui_CheckVideoSizeTimerId != 0)
     {
@@ -4055,6 +4075,8 @@ void MainWindow::on_Emulation_Finished(bool ret, QString error)
     }
     this->ui_RollbackLivePumpPending = false;
     this->ui_RollbackLivePumpActive = false;
+    this->ui_RollbackNetplayRoomActive = false;
+    this->ui_RollbackNetplayLaunchActive = false;
 #endif // NETPLAY
 
     if (!ret)
