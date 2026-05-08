@@ -249,6 +249,7 @@ class MainWindow : public QMainWindow, private Ui::MainWindow
     void on_Action_Rollback_VerifyDebugReplay(void);
     void on_Action_Rollback_VerifyDebugReplayWithGraphics(void);
     void on_Action_Rollback_StressDebugReplay(void);
+    void on_Action_Rollback_GgpoSynctestDebugReplay(void);
 
     void on_Action_Settings_Graphics(void);
     void on_Action_Settings_Audio(void);

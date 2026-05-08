@@ -166,6 +166,7 @@
     <addaction name="action_Rollback_VerifyDebugReplay"/>
     <addaction name="action_Rollback_VerifyDebugReplayWithGraphics"/>
     <addaction name="action_Rollback_StressDebugReplay"/>
+    <addaction name="action_Rollback_GgpoSynctestDebugReplay"/>
    </widget>
    <addaction name="menuSystem"/>
    <addaction name="menuSettings"/>
@@ -708,6 +709,14 @@
    </property>
    <property name="text">
     <string>Stress Debug Replay (Rollback 5 Every 10)</string>
+   </property>
+  </action>
+  <action name="action_Rollback_GgpoSynctestDebugReplay">
+   <property name="icon">
+    <iconset theme="pulse-line"/>
+   </property>
+   <property name="text">
+    <string>GGPO Synctest Debug Replay</string>
    </property>
   </action>
  </widget>

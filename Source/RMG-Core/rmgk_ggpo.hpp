@@ -26,9 +26,11 @@ class rmgk_ggpo
     };
 
     static bool start_session(const SessionCallbacks& callbacks, void* userData);
+    static bool start_synctest(const SessionCallbacks& callbacks, void* userData, const char* gameName, int players, int inputSize, int checkDistance);
     static void close_session();
     static bool idle(int timeoutMs);
     static bool is_session_running();
+    static bool is_real_session_running();
 
     static bool save_game_state(CoreRollbackState& state, int frame);
     static bool load_game_state(const CoreRollbackState& state);

@@ -190,6 +190,7 @@ enum class RollbackDebugReplayMode
     Idle,
     Recording,
     Verifying,
+    Synctesting,
     Stressing
 };
 
@@ -642,6 +643,7 @@ bool RollbackDebugReplaySynchronizeInput(void* values, int size, int players, vo
     }
 
     if (g_RollbackDebugReplay.mode == RollbackDebugReplayMode::Verifying ||
+        g_RollbackDebugReplay.mode == RollbackDebugReplayMode::Synctesting ||
         g_RollbackDebugReplay.mode == RollbackDebugReplayMode::Stressing)
     {
         if (g_RollbackDebugReplay.verifyInputIndex >= g_RollbackDebugReplay.inputs.size())
@@ -1943,6 +1945,7 @@ void MainWindow::updateActions(bool inEmulation, bool isPaused)
     this->action_Rollback_VerifyDebugReplay->setEnabled(inEmulation && isPaused && rollbackDebugReplayReady && rollbackDebugReplayIdle);
     this->action_Rollback_VerifyDebugReplayWithGraphics->setEnabled(inEmulation && isPaused && rollbackDebugReplayReady && rollbackDebugReplayIdle);
     this->action_Rollback_StressDebugReplay->setEnabled(inEmulation && isPaused && rollbackDebugReplayReady && rollbackDebugReplayIdle);
+    this->action_Rollback_GgpoSynctestDebugReplay->setEnabled(inEmulation && isPaused && rollbackDebugReplayReady && rollbackDebugReplayIdle);
 
     // configure keybindings for speed factor
     QAction* speedActions[] =
@@ -2205,6 +2208,7 @@ void MainWindow::configureActions(void)
         this->action_Rollback_SaveGgpoState, this->action_Rollback_LoadGgpoState,
         this->action_Rollback_StartDebugReplay, this->action_Rollback_VerifyDebugReplay,
         this->action_Rollback_VerifyDebugReplayWithGraphics, this->action_Rollback_StressDebugReplay,
+        this->action_Rollback_GgpoSynctestDebugReplay,
         // Settings actions
         this->action_Settings_Graphics, this->action_Settings_Audio,
         this->action_Settings_Rsp, this->action_Settings_Input,
@@ -2337,6 +2341,7 @@ void MainWindow::connectActionSignals(void)
     connect(this->action_Rollback_VerifyDebugReplay, &QAction::triggered, this, &MainWindow::on_Action_Rollback_VerifyDebugReplay);
     connect(this->action_Rollback_VerifyDebugReplayWithGraphics, &QAction::triggered, this, &MainWindow::on_Action_Rollback_VerifyDebugReplayWithGraphics);
     connect(this->action_Rollback_StressDebugReplay, &QAction::triggered, this, &MainWindow::on_Action_Rollback_StressDebugReplay);
+    connect(this->action_Rollback_GgpoSynctestDebugReplay, &QAction::triggered, this, &MainWindow::on_Action_Rollback_GgpoSynctestDebugReplay);
 
     connect(this->action_Settings_Graphics, &QAction::triggered, this, &MainWindow::on_Action_Settings_Graphics);
     connect(this->action_Settings_Audio, &QAction::triggered, this, &MainWindow::on_Action_Settings_Audio);
@@ -4983,6 +4988,147 @@ void MainWindow::on_Action_Rollback_VerifyDebugReplayWithGraphics(void)
 void MainWindow::on_Action_Rollback_StressDebugReplay(void)
 {
     this->runStressDebugReplay();
+}
+
+void MainWindow::on_Action_Rollback_GgpoSynctestDebugReplay(void)
+{
+    if (!CoreIsEmulationPaused())
+    {
+        this->setDebugReplayStatusMessage("Pause emulation before running GGPO synctest");
+        return;
+    }
+
+    std::string replayFileError;
+    if (!LoadRollbackDebugReplayFile(replayFileError))
+    {
+        this->setDebugReplayStatusMessage("Could not load debug replay: " + replayFileError);
+        WriteRollbackDebugReplayEventLog("ggpo_synctest_load_failed", replayFileError);
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
+        if (!g_RollbackDebugReplay.ready || g_RollbackDebugReplay.initialState.buffer == nullptr)
+        {
+            this->setDebugReplayStatusMessage("No debug replay recorded yet");
+            return;
+        }
+        g_RollbackDebugReplay.verifyInputIndex = 0;
+        g_RollbackDebugReplay.verifyFrameIndex = 0;
+        g_RollbackDebugReplay.firstInputMismatchFrame = -1;
+        g_RollbackDebugReplay.firstInputMismatchExpectedHash = 0;
+        g_RollbackDebugReplay.firstInputMismatchActualHash = 0;
+        g_RollbackDebugReplay.firstMismatchFrame = -1;
+        g_RollbackDebugReplay.firstMismatchExpectedHash = 0;
+        g_RollbackDebugReplay.firstMismatchActualHash = 0;
+        g_RollbackDebugReplay.replayedInputHash = 0;
+        g_RollbackDebugReplay.stressRollbackCount = 0;
+        g_RollbackDebugReplay.stressRollbackFrames = 0;
+        g_RollbackDebugReplay.stressResimulatedFrames = 0;
+        g_RollbackDebugReplay.stressResumeFrame = 0;
+        g_RollbackDebugReplay.countReplayInputHash = true;
+        g_RollbackDebugReplay.stressResimulating = false;
+        g_RollbackDebugReplay.verifyWithGraphics = false;
+    }
+
+    if (!rmgk_ggpo::set_deterministic(true))
+    {
+        this->showErrorMessage("GGPO Synctest Deterministic Mode Failed", QString::fromStdString(CoreGetError()));
+        return;
+    }
+
+    if (!rmgk_ggpo::load_game_state(g_RollbackDebugReplay.initialState))
+    {
+        this->showErrorMessage("GGPO Synctest Load Initial State Failed", QString::fromStdString(CoreGetError()));
+        return;
+    }
+
+    rmgk_ggpo::SessionCallbacks callbacks = {};
+    callbacks.synchronize_input = RollbackDebugReplaySynchronizeInput;
+    if (!rmgk_ggpo::start_synctest(callbacks, nullptr, "rmgk-debug-replay",
+        kRollbackDebugReplayPlayers, static_cast<int>(sizeof(uint32_t)), kRollbackDebugStressRollbackFrames))
+    {
+        this->showErrorMessage("GGPO Synctest Start Failed", QString::fromStdString(CoreGetError()));
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
+        g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Synctesting;
+    }
+
+    this->updateActions(true, true);
+    this->setDebugReplayStatusMessage("Running GGPO synctest debug replay for " + std::to_string(kRollbackDebugReplayFrames) + " frames");
+    WriteRollbackDebugReplayEventLog("ggpo_synctest_started", "hidden");
+
+    if (!rmgk_ggpo::advance_frames(kRollbackDebugReplayFrames, CoreFrameOutput_None))
+    {
+        rmgk_ggpo::close_session();
+        {
+            std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
+            g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
+        }
+        this->updateActions(true, true);
+        this->showErrorMessage("GGPO Synctest Run Failed", QString::fromStdString(CoreGetError()));
+        return;
+    }
+
+    CoreRollbackState finalState;
+    if (!rmgk_ggpo::save_game_state(finalState, CoreGetCurrentFrameCount()))
+    {
+        rmgk_ggpo::close_session();
+        {
+            std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
+            g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
+        }
+        this->updateActions(true, true);
+        this->showErrorMessage("GGPO Synctest Save Final State Failed", QString::fromStdString(CoreGetError()));
+        return;
+    }
+
+    const uint64_t finalHash = HashRollbackState(finalState);
+    uint64_t expectedHash;
+    CoreRollbackState expectedFinalState;
+    size_t replayedInputFrames;
+    size_t recordedInputFrames;
+    bool inputsMatched;
+    {
+        std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
+        g_RollbackDebugReplay.verifyFrameIndex = kRollbackDebugReplayFrames;
+        expectedHash = g_RollbackDebugReplay.finalHash;
+        expectedFinalState = g_RollbackDebugReplay.finalState;
+        replayedInputFrames = g_RollbackDebugReplay.verifyInputIndex;
+        recordedInputFrames = g_RollbackDebugReplay.inputs.size();
+        inputsMatched =
+            recordedInputFrames == replayedInputFrames &&
+            g_RollbackDebugReplay.recordedInputHash == g_RollbackDebugReplay.replayedInputHash &&
+            g_RollbackDebugReplay.firstInputMismatchFrame < 0;
+        g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
+    }
+
+    rmgk_ggpo::close_session();
+    const bool matched = inputsMatched && finalHash == expectedHash;
+    WriteRollbackDebugReplayLog("ggpo_synctest_verify", matched, expectedHash, finalHash,
+        recordedInputFrames, replayedInputFrames, expectedFinalState, finalState);
+
+    if (matched)
+    {
+        this->setDebugReplayStatusMessage("GGPO synctest replay matched: " + std::to_string(replayedInputFrames) +
+            " input frames, payload hash " + std::to_string(finalHash) + ", wrote " + kRollbackDebugReplayLogPath);
+    }
+    else
+    {
+        int expectedPayloadLen = 0;
+        int actualPayloadLen = 0;
+        const int firstDiff = FirstRollbackStatePayloadDifference(expectedFinalState, finalState, expectedPayloadLen, actualPayloadLen);
+        this->setDebugReplayStatusMessage("GGPO synctest replay mismatch: expected " + std::to_string(expectedHash) +
+            ", got " + std::to_string(finalHash) + ", replayed " + std::to_string(replayedInputFrames) +
+            "/" + std::to_string(recordedInputFrames) + " input frames, first payload diff " +
+            std::to_string(firstDiff) + ", lens " + std::to_string(expectedPayloadLen) + "/" +
+            std::to_string(actualPayloadLen) + ", wrote " + kRollbackDebugReplayLogPath);
+    }
+
+    this->updateActions(true, true);
 }
 
 void MainWindow::startVerifyDebugReplay(bool withGraphics)
