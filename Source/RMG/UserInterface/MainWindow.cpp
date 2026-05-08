@@ -3905,13 +3905,11 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
                 if (this->ui_RollbackSkipPhase == 1)
                 {
                     this->ui_RollbackSkipPhase = 2;
-                    CoreSetFrameOutput(CoreFrameOutput_All);
 
-                    if (!CoreAdvanceFrames(1))
+                    if (!CoreRunFrames(1, CoreFrameOutput_All))
                     {
                         this->ui_RollbackSkipPhase = 0;
                         this->action_Rollback_Skip120Frames->setEnabled(true);
-                        CoreSetFrameOutput(CoreFrameOutput_All);
                         this->showErrorMessage("Rollback Skip Frames Failed", QString::fromStdString(CoreGetError()));
                     }
                 }
@@ -3924,7 +3922,6 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
 
                     this->ui_RollbackSkipPhase = 0;
                     this->action_Rollback_Skip120Frames->setEnabled(true);
-                    CoreSetFrameOutput(CoreFrameOutput_All);
                     OnScreenDisplaySetMessage("Skipped " + std::to_string(skippedFrames) +
                         " frames in " + QString::number(elapsedMs, 'f', 3).toStdString() + " ms");
 
@@ -4114,19 +4111,10 @@ void MainWindow::on_Action_Rollback_Skip120Frames(void)
     this->ui_RollbackSkipStartTime = std::chrono::steady_clock::now();
     this->action_Rollback_Skip120Frames->setEnabled(false);
 
-    if (!CoreSetFrameOutput(CoreFrameOutput_None))
+    if (!CoreRunFrames(HiddenFrames, CoreFrameOutput_None))
     {
         this->ui_RollbackSkipPhase = 0;
         this->action_Rollback_Skip120Frames->setEnabled(true);
-        this->showErrorMessage("Rollback Skip Frames Failed", QString::fromStdString(CoreGetError()));
-        return;
-    }
-
-    if (!CoreAdvanceFrames(HiddenFrames))
-    {
-        this->ui_RollbackSkipPhase = 0;
-        this->action_Rollback_Skip120Frames->setEnabled(true);
-        CoreSetFrameOutput(CoreFrameOutput_All);
         this->showErrorMessage("Rollback Skip Frames Failed", QString::fromStdString(CoreGetError()));
         return;
     }

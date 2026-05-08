@@ -131,6 +131,11 @@ static int   l_FrameOutputVideo = 1;      // allow video plugin screen updates
 static int   l_FrameOutputAudio = 1;      // allow audio samples to be pushed
 static int   l_FrameOutputPacing = 1;     // allow VI speed limiting and pause loop
 static int   l_FrameOutputInput = 1;      // allow frontend hotkey/input polling during VI
+static int   l_FrameRunActive = 0;        // restore output flags when frame run finishes
+static int   l_FrameRunVideo = 1;
+static int   l_FrameRunAudio = 1;
+static int   l_FrameRunPacing = 1;
+static int   l_FrameRunInput = 1;
 
 static osd_message_t *l_msgVol = NULL;
 static osd_message_t *l_msgFF = NULL;
@@ -620,12 +625,7 @@ void main_advance_one(void)
 
 void main_advance_frames(int frames)
 {
-    l_FrameAdvance = 1;
-    if (frames > 1)
-        l_FrameAdvance = frames;
-
-    g_rom_pause = 0;
-    StateChanged(M64CORE_EMU_STATE, M64EMU_RUNNING);
+    main_run_frames(frames, M64FRAME_OUTPUT_ALL);
 }
 
 void main_set_frame_output(int video, int audio, int pacing, int frontend_input)
@@ -634,6 +634,30 @@ void main_set_frame_output(int video, int audio, int pacing, int frontend_input)
     l_FrameOutputAudio = audio ? 1 : 0;
     l_FrameOutputPacing = pacing ? 1 : 0;
     l_FrameOutputInput = frontend_input ? 1 : 0;
+}
+
+void main_run_frames(int frames, int output_flags)
+{
+    if (frames < 1)
+        frames = 1;
+
+    if (!l_FrameRunActive) {
+        l_FrameRunVideo = l_FrameOutputVideo;
+        l_FrameRunAudio = l_FrameOutputAudio;
+        l_FrameRunPacing = l_FrameOutputPacing;
+        l_FrameRunInput = l_FrameOutputInput;
+        l_FrameRunActive = 1;
+    }
+
+    main_set_frame_output(
+        (output_flags & M64FRAME_OUTPUT_VIDEO) != 0,
+        (output_flags & M64FRAME_OUTPUT_AUDIO) != 0,
+        (output_flags & M64FRAME_OUTPUT_PACING) != 0,
+        (output_flags & M64FRAME_OUTPUT_INPUT) != 0);
+
+    l_FrameAdvance = frames;
+    g_rom_pause = 0;
+    StateChanged(M64CORE_EMU_STATE, M64EMU_RUNNING);
 }
 
 int main_frame_video_enabled(void)
@@ -1010,6 +1034,10 @@ void new_frame(void)
     if (l_FrameAdvance > 0) {
         l_FrameAdvance--;
         if (l_FrameAdvance == 0) {
+            if (l_FrameRunActive) {
+                main_set_frame_output(l_FrameRunVideo, l_FrameRunAudio, l_FrameRunPacing, l_FrameRunInput);
+                l_FrameRunActive = 0;
+            }
             g_rom_pause = 1;
             StateChanged(M64CORE_EMU_STATE, M64EMU_PAUSED);
         }
@@ -1120,6 +1148,9 @@ static void pause_loop(void)
  * Allow the core to perform various things */
 void new_vi(void)
 {
+    int frame_output_pacing = main_frame_pacing_enabled();
+    int frame_output_input = main_frame_frontend_input_enabled();
+
     new_frame();
 #if defined(PROFILE)
     timed_sections_refresh();
@@ -1127,10 +1158,10 @@ void new_vi(void)
 
     gs_apply_cheats(&g_cheat_ctx);
 
-    if (main_frame_pacing_enabled())
+    if (frame_output_pacing)
         apply_speed_limiter();
 
-    if (main_frame_frontend_input_enabled())
+    if (frame_output_input)
         main_check_inputs();
 
     if (main_frame_pacing_enabled())
@@ -2116,6 +2147,7 @@ void main_stop(void)
 
     DebugMessage(M64MSG_STATUS, "Stopping emulation.");
     main_set_frame_output(1, 1, 1, 1);
+    l_FrameRunActive = 0;
     if(l_msgPause)
     {
         osd_delete_message(l_msgPause);

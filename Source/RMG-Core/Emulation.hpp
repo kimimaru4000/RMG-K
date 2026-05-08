@@ -50,6 +50,9 @@ enum CoreFrameOutputFlags
 // configures frame side effects used by normal, hidden, and rollback frames
 bool CoreSetFrameOutput(int flags);
 
+// advances emulation by several frames using per-call frame side effects
+bool CoreRunFrames(int frames, int flags);
+
 // resets emulation
 bool CoreResetEmulation(bool hard);
 
