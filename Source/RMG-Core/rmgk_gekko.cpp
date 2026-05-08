@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -36,9 +35,12 @@ namespace
 {
 constexpr unsigned int kGekkoStateCapacity = 24u * 1024u * 1024u;
 constexpr int kGekkoMaxLoggedFrames = 600;
-constexpr float kGekkoPacingFramesAheadThreshold = 0.5f;
-constexpr int kGekkoPacingExtraUs = 267;
 constexpr int kGekkoWaitSleepUs = 100;
+constexpr float kGekkoTimesyncDeadzone = 0.5f;
+constexpr double kGekkoTimesyncStrength = 0.002;
+constexpr double kGekkoTimesyncMinScale = 0.99;
+constexpr double kGekkoTimesyncMaxScale = 1.01;
+constexpr double kGekkoTimesyncLerp = 0.15;
 
 #ifdef RMGK_HAVE_GEKKONET
 struct PendingGekkoSave
@@ -67,6 +69,7 @@ std::vector<unsigned char> g_GekkoLastLatchedInput;
 int g_GekkoWaitingLoops = 0;
 int g_GekkoLocalInputLogRepeats = 0;
 int g_GekkoPacingLogFrames = 0;
+double g_GekkoSpeedScale = 1.0;
 bool g_GekkoLogEnabled = false;
 #endif
 
@@ -96,6 +99,7 @@ void reset_gekko_log()
         g_GekkoWaitingLoops = 0;
         g_GekkoLocalInputLogRepeats = 0;
         g_GekkoPacingLogFrames = 0;
+        g_GekkoSpeedScale = 1.0;
         return;
     }
 
@@ -109,6 +113,7 @@ void reset_gekko_log()
     g_GekkoWaitingLoops = 0;
     g_GekkoLocalInputLogRepeats = 0;
     g_GekkoPacingLogFrames = 0;
+    g_GekkoSpeedScale = 1.0;
 }
 
 void write_gekko_log(const std::string& message)
@@ -383,22 +388,24 @@ bool process_pending_saves()
 void apply_gekko_frame_pacing()
 {
     const float framesAhead = gekko_frames_ahead(g_GekkoSession);
-    int sleepUs = 0;
-
-    if (framesAhead > kGekkoPacingFramesAheadThreshold)
+    double targetScale = 1.0;
+    if (framesAhead >= kGekkoTimesyncDeadzone || framesAhead <= -kGekkoTimesyncDeadzone)
     {
-        sleepUs = static_cast<int>(std::lround(kGekkoPacingExtraUs * std::max(1.0f, framesAhead)));
-        sleepUs = std::clamp(sleepUs, kGekkoPacingExtraUs, 2000);
-        std::this_thread::sleep_for(std::chrono::microseconds(sleepUs));
+        targetScale = 1.0 + (static_cast<double>(framesAhead) * kGekkoTimesyncStrength);
+        targetScale = std::clamp(targetScale, kGekkoTimesyncMinScale, kGekkoTimesyncMaxScale);
     }
+
+    g_GekkoSpeedScale += (targetScale - g_GekkoSpeedScale) * kGekkoTimesyncLerp;
+    CoreRollbackSetTimesyncScale(g_GekkoSpeedScale);
 
     g_GekkoPacingLogFrames++;
     if (g_GekkoLogEnabled &&
-        (sleepUs > 0 || g_GekkoPacingLogFrames <= 10 || (g_GekkoPacingLogFrames % 60) == 0))
+        (targetScale != 1.0 || g_GekkoPacingLogFrames <= 10 || (g_GekkoPacingLogFrames % 60) == 0))
     {
         std::ostringstream stream;
         stream << "pacing frames_ahead=" << std::fixed << std::setprecision(2) << framesAhead
-               << " sleep_us=" << sleepUs;
+               << " target_scale=" << std::setprecision(4) << targetScale
+               << " speed_scale=" << g_GekkoSpeedScale;
 
         if (g_GekkoRemoteHandle >= 0)
         {
@@ -432,16 +439,16 @@ int rollback_execute_begin_frame(void* userData)
     g_GekkoHasLatchedInput = false;
     g_GekkoPendingSaves.clear();
 
+    if (!submit_local_input())
+    {
+        return 0;
+    }
+
     for (;;)
     {
         if (g_GekkoStopRequested.load(std::memory_order_relaxed))
         {
             write_gekko_log("begin_frame result=stop_requested");
-            return 0;
-        }
-
-        if (!submit_local_input())
-        {
             return 0;
         }
 
@@ -744,6 +751,8 @@ CORE_EXPORT void rmgk_gekko::close_session()
     g_GekkoHasLatchedInput = false;
     g_GekkoExecuting.store(false, std::memory_order_relaxed);
     g_GekkoPendingSaves.clear();
+    g_GekkoSpeedScale = 1.0;
+    CoreRollbackSetTimesyncScale(1.0);
 #endif
 }
 

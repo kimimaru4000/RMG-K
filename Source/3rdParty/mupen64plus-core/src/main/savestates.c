@@ -325,6 +325,7 @@ static int savestates_load_m64p(struct device* dev, char *filepath)
         memcpy(header, memory_data, 44);
         memory_offset = 44;
         rollback_load_start = SDL_GetPerformanceCounter();
+        curr = header;
     }
     // Check if this is a memory load (for rollback debug ring)
     else if (strcmp(filepath, "MEMORY") == 0)
@@ -1261,7 +1262,7 @@ static int savestates_load_m64p(struct device* dev, char *filepath)
             "Rollback load %" PRIu64 " us (RDRAM %" PRIu64 ", TLB %" PRIu64 "%s, extra %" PRIu64 ")",
             rollback_total_us, rollback_rdram_us, rollback_tlb_us, rollback_tlb_lut_skipped ? " skip" : "", rollback_extra_us);
     }
-    else
+    else if (memory_data == NULL)
     {
         main_message(M64MSG_STATUS, OSD_BOTTOM_LEFT, "State loaded from: %s", namefrompath(filepath));
     }

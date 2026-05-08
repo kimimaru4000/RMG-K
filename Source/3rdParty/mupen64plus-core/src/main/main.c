@@ -136,6 +136,7 @@ static int   l_FrameRunVideo = 1;
 static int   l_FrameRunAudio = 1;
 static int   l_FrameRunPacing = 1;
 static int   l_FrameRunInput = 1;
+static double l_RollbackTimesyncScale = 1.0;
 static m64p_rollback_execute_callbacks l_RollbackExecuteCallbacks;
 static int   l_RollbackExecuteActive = 0;
 static int   l_RollbackSingleStepActive = 0;
@@ -641,6 +642,15 @@ void main_set_frame_output(int video, int audio, int pacing, int frontend_input)
     l_FrameOutputInput = frontend_input ? 1 : 0;
 }
 
+void main_set_rollback_timesync_scale(double scale)
+{
+    if (scale < 0.99)
+        scale = 0.99;
+    else if (scale > 1.01)
+        scale = 1.01;
+    l_RollbackTimesyncScale = scale;
+}
+
 void main_run_frames(int frames, int output_flags)
 {
     if (frames < 1)
@@ -1144,7 +1154,7 @@ static void apply_speed_limiter(void)
     // calculate frame duration based upon ROM setting (50/60hz) and mupen64plus speed adjustment
     const double VILimitMilliseconds = 1000.0 / g_dev.vi.expected_refresh_rate;
     const double SpeedFactorMultiple = defaultSpeedFactor/l_SpeedFactor;
-    const double AdjustedLimit = VILimitMilliseconds * SpeedFactorMultiple;
+    const double AdjustedLimit = (VILimitMilliseconds * SpeedFactorMultiple) / l_RollbackTimesyncScale;
 
     //if this is the first time or we are resuming from pause
     if(StartFPSTime == 0 || !resetOnce || lastSpeedFactor != l_SpeedFactor)

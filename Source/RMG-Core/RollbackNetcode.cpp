@@ -183,6 +183,28 @@ CORE_EXPORT bool CoreRollbackSetVerboseStats(bool enabled)
     return true;
 }
 
+CORE_EXPORT bool CoreRollbackSetTimesyncScale(double scale)
+{
+    std::string error;
+    m64p_error ret;
+
+    if (!m64p::Core.IsHooked())
+    {
+        return false;
+    }
+
+    ret = m64p::Core.DoCommand(M64CMD_ROLLBACK_SET_TIMESYNC_SCALE, 0, &scale);
+    if (ret != M64ERR_SUCCESS)
+    {
+        error = "CoreRollbackSetTimesyncScale DoCommand(M64CMD_ROLLBACK_SET_TIMESYNC_SCALE) Failed: ";
+        error += m64p::Core.ErrorMessage(ret);
+        CoreSetError(error);
+        return false;
+    }
+
+    return true;
+}
+
 CORE_EXPORT bool CoreRollbackExecute(m64p_rollback_execute_callbacks& callbacks)
 {
     std::string error;
