@@ -99,6 +99,7 @@ void pif_set_rollback_input_callback(m64p_rollback_input_callback callback)
 static void rollback_sync_input(struct pif* pif)
 {
     uint32_t input_values[ROLLBACK_INPUT_PLAYERS] = { 0 };
+    int has_controller_read = 0;
     size_t k;
 
     if (l_rollback_input_callback == NULL) {
@@ -130,8 +131,13 @@ static void rollback_sync_input(struct pif* pif)
         && channel->rx_buf != NULL
         && channel->tx_buf[0] == JCMD_CONTROLLER_READ
         && ((*channel->rx & 0x80) == 0)) {
+            has_controller_read = 1;
             input_values[k] = rollback_read_controller_input(channel->rx_buf);
         }
+    }
+
+    if (!has_controller_read) {
+        return;
     }
 
     if (!l_rollback_input_callback(input_values, sizeof(input_values[0]), ROLLBACK_INPUT_PLAYERS)) {
