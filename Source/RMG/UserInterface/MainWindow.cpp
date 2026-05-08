@@ -145,6 +145,7 @@ public:
 #include <array>
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <vector>
@@ -178,7 +179,7 @@ constexpr int kRollbackDebugReplayFrames = 1200;
 constexpr int kRollbackDebugReplayPlayers = 4;
 constexpr const char* kRollbackDebugReplayFilePath = "rollback_sanity_test.replay";
 constexpr uint32_t kRollbackDebugReplayMagic = 0x52534452;
-constexpr uint32_t kRollbackDebugReplayVersion = 1;
+constexpr uint32_t kRollbackDebugReplayVersion = 2;
 
 enum class RollbackDebugReplayMode
 {
@@ -302,7 +303,7 @@ bool LoadRollbackDebugReplayFile(std::string& error)
         frames != kRollbackDebugReplayFrames || players != kRollbackDebugReplayPlayers ||
         stateLen <= 0 || inputCount < 0 || inputCount > kRollbackDebugReplayFrames)
     {
-        error = "rollback_sanity_test.replay has an invalid format";
+        error = "rollback_sanity_test.replay has an invalid or stale format; record it again";
         return false;
     }
 
@@ -353,11 +354,38 @@ uint64_t HashRollbackState(const CoreRollbackState& state)
 {
     constexpr uint64_t OffsetBasis = 14695981039346656037ull;
     constexpr uint64_t Prime = 1099511628211ull;
+    constexpr int GgpoHeaderInts = 6;
+    constexpr int GgpoHeaderSize = GgpoHeaderInts * static_cast<int>(sizeof(int32_t));
+    constexpr int32_t GgpoHeaderMagic =
+        (static_cast<int32_t>('G') << 24) |
+        (static_cast<int32_t>('G') << 16) |
+        (static_cast<int32_t>('P') << 8) |
+        static_cast<int32_t>('O');
     uint64_t hash = OffsetBasis;
+    const unsigned char* buffer = state.buffer;
+    int len = state.len;
 
-    for (int i = 0; i < state.len; i++)
+    if (buffer == nullptr)
     {
-        hash ^= state.buffer[i];
+        len = 0;
+    }
+
+    if (buffer != nullptr && len >= GgpoHeaderSize)
+    {
+        int32_t magic = 0;
+        int32_t headerSize = 0;
+        std::memcpy(&magic, buffer, sizeof(magic));
+        std::memcpy(&headerSize, buffer + sizeof(magic), sizeof(headerSize));
+        if (magic == GgpoHeaderMagic && headerSize == GgpoHeaderSize)
+        {
+            buffer += GgpoHeaderSize;
+            len -= GgpoHeaderSize;
+        }
+    }
+
+    for (int i = 0; i < len; i++)
+    {
+        hash ^= buffer[i];
         hash *= Prime;
     }
 
@@ -4216,7 +4244,7 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
                         if (replayFileSaved)
                         {
                             this->setDebugReplayStatusMessage("Recorded debug replay: " + std::to_string(recordedInputFrames) +
-                                " input frames, hash " + std::to_string(finalHash) + ", wrote " + kRollbackDebugReplayFilePath);
+                                " input frames, payload hash " + std::to_string(finalHash) + ", wrote " + kRollbackDebugReplayFilePath);
                         }
                         else
                         {
@@ -4258,13 +4286,14 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
                         {
                             OnScreenDisplayResume();
                             this->setDebugReplayStatusMessage("Debug replay matched: " + std::to_string(replayedInputFrames) +
-                                " input frames, hash " + std::to_string(finalHash));
+                                " input frames, payload hash " + std::to_string(finalHash));
                         }
                         else
                         {
                             OnScreenDisplayResume();
                             this->setDebugReplayStatusMessage("Debug replay mismatch: expected " + std::to_string(expectedHash) +
-                                ", got " + std::to_string(finalHash));
+                                ", got " + std::to_string(finalHash) + ", replayed " + std::to_string(replayedInputFrames) +
+                                " input frames");
                         }
                     }
 
