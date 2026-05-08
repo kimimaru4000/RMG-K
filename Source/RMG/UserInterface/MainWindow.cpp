@@ -4580,7 +4580,7 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
                 if (replayMode == RollbackDebugReplayMode::Recording)
                 {
                     CoreRollbackState finalState;
-                    rmgk_ggpo::clear_core_input_callback();
+                    rmgk_ggpo::close_session();
 
                     if (!rmgk_ggpo::save_game_state(finalState, CoreGetCurrentFrameCount()))
                     {
@@ -4632,7 +4632,7 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
 
                     if (!rmgk_ggpo::save_game_state(finalState, CoreGetCurrentFrameCount()))
                     {
-                        rmgk_ggpo::clear_core_input_callback();
+                        rmgk_ggpo::close_session();
                         {
                             std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
                             g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
@@ -4692,7 +4692,7 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
                                 }
                                 if (stillVerifying && !rmgk_ggpo::advance_frame(withGraphics ? CoreFrameOutput_All : CoreFrameOutput_None))
                                 {
-                                    rmgk_ggpo::clear_core_input_callback();
+                                    rmgk_ggpo::close_session();
                                     {
                                         std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
                                         g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
@@ -4704,7 +4704,7 @@ void MainWindow::on_Core_StateCallback(CoreStateCallbackType type, int value)
                             return;
                         }
 
-                        rmgk_ggpo::clear_core_input_callback();
+                        rmgk_ggpo::close_session();
                         {
                             std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
                             g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
@@ -4941,8 +4941,9 @@ void MainWindow::on_Action_Rollback_StartDebugReplay(void)
         return;
     }
 
-    rmgk_ggpo::set_synchronize_input_callback(RollbackDebugReplaySynchronizeInput, nullptr);
-    if (!rmgk_ggpo::install_core_input_callback())
+    rmgk_ggpo::SessionCallbacks callbacks = {};
+    callbacks.synchronize_input = RollbackDebugReplaySynchronizeInput;
+    if (!rmgk_ggpo::start_session(callbacks, nullptr))
     {
         this->showErrorMessage("Debug Replay Input Callback Failed", QString::fromStdString(CoreGetError()));
         return;
@@ -4958,7 +4959,7 @@ void MainWindow::on_Action_Rollback_StartDebugReplay(void)
 
     if (!rmgk_ggpo::advance_frames(kRollbackDebugReplayFrames, CoreFrameOutput_All))
     {
-        rmgk_ggpo::clear_core_input_callback();
+        rmgk_ggpo::close_session();
         {
             std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
             g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
@@ -5058,8 +5059,9 @@ void MainWindow::startVerifyDebugReplay(bool withGraphics)
     }
     rmgk_ggpo::free_buffer(loadedInitialState);
 
-    rmgk_ggpo::set_synchronize_input_callback(RollbackDebugReplaySynchronizeInput, nullptr);
-    if (!rmgk_ggpo::install_core_input_callback())
+    rmgk_ggpo::SessionCallbacks callbacks = {};
+    callbacks.synchronize_input = RollbackDebugReplaySynchronizeInput;
+    if (!rmgk_ggpo::start_session(callbacks, nullptr))
     {
         this->showErrorMessage("Debug Replay Input Callback Failed", QString::fromStdString(CoreGetError()));
         return;
@@ -5084,7 +5086,7 @@ void MainWindow::startVerifyDebugReplay(bool withGraphics)
 
     if (!rmgk_ggpo::advance_frames(framesToRun, withGraphics ? CoreFrameOutput_All : CoreFrameOutput_None))
     {
-        rmgk_ggpo::clear_core_input_callback();
+        rmgk_ggpo::close_session();
         {
             std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
             g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
@@ -5177,8 +5179,9 @@ void MainWindow::runStressDebugReplay(void)
         return;
     }
 
-    rmgk_ggpo::set_synchronize_input_callback(RollbackDebugReplaySynchronizeInput, nullptr);
-    if (!rmgk_ggpo::install_core_input_callback())
+    rmgk_ggpo::SessionCallbacks callbacks = {};
+    callbacks.synchronize_input = RollbackDebugReplaySynchronizeInput;
+    if (!rmgk_ggpo::start_session(callbacks, nullptr))
     {
         FreeRollbackDebugStressCheckpoints();
         this->showErrorMessage("Rollback Stress Input Callback Failed", QString::fromStdString(CoreGetError()));
@@ -5201,7 +5204,7 @@ void MainWindow::runStressDebugReplay(void)
     }
     if (!rmgk_ggpo::advance_frame(CoreFrameOutput_All))
     {
-        rmgk_ggpo::clear_core_input_callback();
+        rmgk_ggpo::close_session();
         WriteRollbackDebugReplayEventLog("stress_failed", CoreGetError());
         {
             std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
@@ -5218,7 +5221,7 @@ void MainWindow::continueStressDebugReplay(void)
 {
     auto failStressReplay = [this](const std::string& error)
     {
-        rmgk_ggpo::clear_core_input_callback();
+        rmgk_ggpo::close_session();
         WriteRollbackDebugReplayEventLog("stress_failed", error);
         {
             std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
@@ -5266,7 +5269,7 @@ void MainWindow::continueStressDebugReplay(void)
     if (frame >= kRollbackDebugReplayFrames)
     {
         CoreRollbackState finalState = {};
-        rmgk_ggpo::clear_core_input_callback();
+        rmgk_ggpo::close_session();
         if (!rmgk_ggpo::save_game_state(finalState, CoreGetCurrentFrameCount()))
         {
             failStressReplay(CoreGetError());

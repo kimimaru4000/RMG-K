@@ -18,6 +18,16 @@ class rmgk_ggpo
   public:
     using SynchronizeInputCallback = bool (*)(void* values, int size, int players, void* userData);
 
+    struct SessionCallbacks
+    {
+        SynchronizeInputCallback synchronize_input = nullptr;
+    };
+
+    static bool start_session(const SessionCallbacks& callbacks, void* userData);
+    static void close_session();
+    static bool idle(int timeoutMs);
+    static bool is_session_running();
+
     static bool save_game_state(CoreRollbackState& state, int frame);
     static bool load_game_state(const CoreRollbackState& state);
     static void free_buffer(CoreRollbackState& state);

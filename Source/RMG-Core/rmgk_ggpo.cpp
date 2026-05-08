@@ -14,14 +14,48 @@
 
 namespace
 {
-rmgk_ggpo::SynchronizeInputCallback g_SynchronizeInputCallback = nullptr;
+rmgk_ggpo::SessionCallbacks g_SessionCallbacks;
 void* g_SynchronizeInputUserData = nullptr;
+bool g_SessionRunning = false;
 
 int rmgk_ggpo_core_input_callback(void* values, int size, int players)
 {
     return rmgk_ggpo::synchronize_input(values, size, players) ? 1 : 0;
 }
 } // namespace
+
+CORE_EXPORT bool rmgk_ggpo::start_session(const SessionCallbacks& callbacks, void* userData)
+{
+    g_SessionCallbacks = callbacks;
+    g_SynchronizeInputUserData = userData;
+    g_SessionRunning = true;
+
+    if (!install_core_input_callback())
+    {
+        g_SessionCallbacks = {};
+        g_SynchronizeInputUserData = nullptr;
+        g_SessionRunning = false;
+        return false;
+    }
+
+    return true;
+}
+
+CORE_EXPORT void rmgk_ggpo::close_session()
+{
+    clear_core_input_callback();
+}
+
+CORE_EXPORT bool rmgk_ggpo::idle(int timeoutMs)
+{
+    (void)timeoutMs;
+    return g_SessionRunning;
+}
+
+CORE_EXPORT bool rmgk_ggpo::is_session_running()
+{
+    return g_SessionRunning;
+}
 
 CORE_EXPORT bool rmgk_ggpo::save_game_state(CoreRollbackState& state, int frame)
 {
@@ -55,7 +89,7 @@ CORE_EXPORT bool rmgk_ggpo::set_deterministic(bool enabled)
 
 CORE_EXPORT void rmgk_ggpo::set_synchronize_input_callback(SynchronizeInputCallback callback, void* userData)
 {
-    g_SynchronizeInputCallback = callback;
+    g_SessionCallbacks.synchronize_input = callback;
     g_SynchronizeInputUserData = userData;
 }
 
@@ -67,16 +101,17 @@ CORE_EXPORT bool rmgk_ggpo::install_core_input_callback()
 CORE_EXPORT void rmgk_ggpo::clear_core_input_callback()
 {
     CoreRollbackSetInputCallback(nullptr);
-    g_SynchronizeInputCallback = nullptr;
+    g_SessionCallbacks = {};
     g_SynchronizeInputUserData = nullptr;
+    g_SessionRunning = false;
 }
 
 CORE_EXPORT bool rmgk_ggpo::synchronize_input(void* values, int size, int players)
 {
-    if (g_SynchronizeInputCallback == nullptr)
+    if (g_SessionCallbacks.synchronize_input == nullptr)
     {
         return true;
     }
 
-    return g_SynchronizeInputCallback(values, size, players, g_SynchronizeInputUserData);
+    return g_SessionCallbacks.synchronize_input(values, size, players, g_SynchronizeInputUserData);
 }
