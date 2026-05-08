@@ -106,3 +106,25 @@ CORE_EXPORT bool CoreRollbackSetInputCallback(CoreRollbackInputCallback callback
 
     return true;
 }
+
+CORE_EXPORT bool CoreRollbackSetDeterministic(bool enabled)
+{
+    std::string error;
+    m64p_error ret;
+
+    if (!m64p::Core.IsHooked())
+    {
+        return false;
+    }
+
+    ret = m64p::Core.DoCommand(M64CMD_ROLLBACK_SET_DETERMINISTIC, enabled ? 1 : 0, nullptr);
+    if (ret != M64ERR_SUCCESS)
+    {
+        error = "CoreRollbackSetDeterministic DoCommand(M64CMD_ROLLBACK_SET_DETERMINISTIC) Failed: ";
+        error += m64p::Core.ErrorMessage(ret);
+        CoreSetError(error);
+        return false;
+    }
+
+    return true;
+}

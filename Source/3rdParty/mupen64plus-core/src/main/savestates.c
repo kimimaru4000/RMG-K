@@ -1744,6 +1744,7 @@ static int savestates_save_m64p(const struct device* dev, char *filepath)
     if(autoinc_save_slot)
         savestates_inc_slot();
 
+    memset(queue, 0, sizeof(queue));
     save_eventqueue_infos(&dev->r4300.cp0, queue);
 
     // Allocate memory for the save state data

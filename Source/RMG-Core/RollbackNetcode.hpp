@@ -25,5 +25,6 @@ bool CoreRollbackLoadGameState(const CoreRollbackState& state);
 void CoreRollbackFreeGameState(CoreRollbackState& state);
 bool CoreRollbackAdvanceFrame(void);
 bool CoreRollbackSetInputCallback(CoreRollbackInputCallback callback);
+bool CoreRollbackSetDeterministic(bool enabled);
 
 #endif // CORE_ROLLBACK_NETCODE_HPP
