@@ -123,6 +123,14 @@ typedef struct {
   uint64_t interrupt_rsp_dma_us;
   uint64_t interrupt_rsp_task_count;
   uint64_t interrupt_rsp_task_us;
+  uint64_t ai_set_frequency_count;
+  uint64_t ai_set_frequency_us;
+  uint64_t ai_push_samples_count;
+  uint64_t ai_push_samples_us;
+  uint64_t ai_fifo_pop_count;
+  uint64_t ai_fifo_pop_us;
+  uint64_t ai_raise_interrupt_count;
+  uint64_t ai_raise_interrupt_us;
   uint32_t emumode;
   uint32_t interrupt_max_type;
   uint32_t cp0_count_before;

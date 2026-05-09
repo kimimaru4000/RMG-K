@@ -102,6 +102,7 @@ static uint64_t rollback_interrupt_now_us(void)
 void interrupt_rollback_stats_reset(void)
 {
     memset(&l_RollbackInterruptStats, 0, sizeof(l_RollbackInterruptStats));
+    ai_rollback_stats_reset();
 }
 
 void interrupt_rollback_stats_fill(m64p_rollback_run_frame_stats* stats)
@@ -133,6 +134,7 @@ void interrupt_rollback_stats_fill(m64p_rollback_run_frame_stats* stats)
     stats->interrupt_rsp_dma_us = l_RollbackInterruptStats.rsp_dma_us;
     stats->interrupt_rsp_task_count = l_RollbackInterruptStats.rsp_task_count;
     stats->interrupt_rsp_task_us = l_RollbackInterruptStats.rsp_task_us;
+    ai_rollback_stats_fill(stats);
 }
 
 static void rollback_interrupt_record(int type, uint64_t elapsed_us)

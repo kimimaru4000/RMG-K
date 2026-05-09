@@ -74,6 +74,14 @@ struct CoreRollbackRunFrameStats
     uint64_t interruptRspDmaUs = 0;
     uint64_t interruptRspTaskCount = 0;
     uint64_t interruptRspTaskUs = 0;
+    uint64_t aiSetFrequencyCount = 0;
+    uint64_t aiSetFrequencyUs = 0;
+    uint64_t aiPushSamplesCount = 0;
+    uint64_t aiPushSamplesUs = 0;
+    uint64_t aiFifoPopCount = 0;
+    uint64_t aiFifoPopUs = 0;
+    uint64_t aiRaiseInterruptCount = 0;
+    uint64_t aiRaiseInterruptUs = 0;
     uint32_t emumode = 0;
     uint32_t interruptMaxType = 0;
     uint32_t cp0CountBefore = 0;

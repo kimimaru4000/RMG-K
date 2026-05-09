@@ -320,6 +320,14 @@ CORE_EXPORT bool CoreRollbackGetRunFrameStats(CoreRollbackRunFrameStats& stats)
     stats.interruptRspDmaUs = coreStats.interrupt_rsp_dma_us;
     stats.interruptRspTaskCount = coreStats.interrupt_rsp_task_count;
     stats.interruptRspTaskUs = coreStats.interrupt_rsp_task_us;
+    stats.aiSetFrequencyCount = coreStats.ai_set_frequency_count;
+    stats.aiSetFrequencyUs = coreStats.ai_set_frequency_us;
+    stats.aiPushSamplesCount = coreStats.ai_push_samples_count;
+    stats.aiPushSamplesUs = coreStats.ai_push_samples_us;
+    stats.aiFifoPopCount = coreStats.ai_fifo_pop_count;
+    stats.aiFifoPopUs = coreStats.ai_fifo_pop_us;
+    stats.aiRaiseInterruptCount = coreStats.ai_raise_interrupt_count;
+    stats.aiRaiseInterruptUs = coreStats.ai_raise_interrupt_us;
     stats.emumode = coreStats.emumode;
     stats.cp0CountBefore = coreStats.cp0_count_before;
     stats.cp0CountAfter = coreStats.cp0_count_after;

@@ -334,6 +334,14 @@ std::string FormatRollbackRunFrameStats(const CoreRollbackRunFrameStats& stats)
            << " interrupt_rsp_dma_us=" << stats.interruptRspDmaUs
            << " interrupt_rsp_task_count=" << stats.interruptRspTaskCount
            << " interrupt_rsp_task_us=" << stats.interruptRspTaskUs
+           << " ai_set_frequency_count=" << stats.aiSetFrequencyCount
+           << " ai_set_frequency_us=" << stats.aiSetFrequencyUs
+           << " ai_push_samples_count=" << stats.aiPushSamplesCount
+           << " ai_push_samples_us=" << stats.aiPushSamplesUs
+           << " ai_fifo_pop_count=" << stats.aiFifoPopCount
+           << " ai_fifo_pop_us=" << stats.aiFifoPopUs
+           << " ai_raise_interrupt_count=" << stats.aiRaiseInterruptCount
+           << " ai_raise_interrupt_us=" << stats.aiRaiseInterruptUs
            << " emumode=" << stats.emumode
            << " cp0_count_before=" << stats.cp0CountBefore
            << " cp0_count_after=" << stats.cp0CountAfter

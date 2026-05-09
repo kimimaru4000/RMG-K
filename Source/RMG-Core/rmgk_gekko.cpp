@@ -824,6 +824,14 @@ int rollback_execute_begin_frame(void* userData)
                                    << " interrupt_rsp_dma_us=" << runFrameStats.interruptRspDmaUs
                                    << " interrupt_rsp_task_count=" << runFrameStats.interruptRspTaskCount
                                    << " interrupt_rsp_task_us=" << runFrameStats.interruptRspTaskUs
+                                   << " ai_set_frequency_count=" << runFrameStats.aiSetFrequencyCount
+                                   << " ai_set_frequency_us=" << runFrameStats.aiSetFrequencyUs
+                                   << " ai_push_samples_count=" << runFrameStats.aiPushSamplesCount
+                                   << " ai_push_samples_us=" << runFrameStats.aiPushSamplesUs
+                                   << " ai_fifo_pop_count=" << runFrameStats.aiFifoPopCount
+                                   << " ai_fifo_pop_us=" << runFrameStats.aiFifoPopUs
+                                   << " ai_raise_interrupt_count=" << runFrameStats.aiRaiseInterruptCount
+                                   << " ai_raise_interrupt_us=" << runFrameStats.aiRaiseInterruptUs
                                    << " emumode=" << runFrameStats.emumode
                                    << " cp0_count_before=" << runFrameStats.cp0CountBefore
                                    << " cp0_count_after=" << runFrameStats.cp0CountAfter

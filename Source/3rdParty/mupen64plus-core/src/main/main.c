@@ -828,6 +828,11 @@ static int main_rollback_hidden_frame_completed(void)
     return completed;
 }
 
+int main_rollback_hidden_frame_active(void)
+{
+    return l_RollbackHiddenStepActive;
+}
+
 int main_rollback_run_frame(int output_flags)
 {
     int old_video = l_FrameOutputVideo;
