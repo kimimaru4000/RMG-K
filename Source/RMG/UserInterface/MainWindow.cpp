@@ -1034,43 +1034,18 @@ bool RollbackDebugReplayEndFrame(void* userData)
 
 bool RollbackDebugRecordFrameHashFromRollbackFrame()
 {
-    CoreRollbackState frameState;
-    const auto saveBeginTime = std::chrono::steady_clock::now();
-    if (!CoreRollbackSaveGameState(frameState, CoreGetCurrentFrameCount()))
-    {
-        const auto saveUs =
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - saveBeginTime).count();
-        std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
-        g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
-        g_RollbackDebugReplay.ready = false;
-        WriteRollbackDebugReplayEventLog("record_frame_hash_failed",
-            "save_us=" + std::to_string(saveUs) + " error=" + CoreGetError());
-        return false;
-    }
-    const auto saveUs =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - saveBeginTime).count();
-
-    const uint64_t frameHash = HashRollbackState(frameState);
     size_t frameHashCount;
     {
         std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
-        if (g_RollbackDebugReplay.frameHashes.size() < static_cast<size_t>(kRollbackDebugReplayFrames))
-        {
-            g_RollbackDebugReplay.frameHashes.push_back(frameHash);
-        }
-        frameHashCount = g_RollbackDebugReplay.frameHashes.size();
+        frameHashCount = g_RollbackDebugReplay.inputs.size();
     }
     if (frameHashCount <= 5 || (frameHashCount % 60) == 0)
     {
         WriteRollbackDebugReplayEventLog("record_frame_hash",
             "frame=" + std::to_string(frameHashCount) +
-            " save_us=" + std::to_string(saveUs) +
-            " hash=" + std::to_string(frameHash));
+            " skipped=1 reason=hot_path_debug_hash_disabled");
     }
 
-    CoreRollbackFreeGameState(frameState);
     return true;
 }
 
@@ -1130,29 +1105,42 @@ bool RollbackDebugFinishRecordingFromRollbackFrame()
 bool RollbackDebugVerifyFromRollbackFrame()
 {
     RollbackDebugReplayMode mode;
+    bool hasPerFrameHashes;
+    size_t pendingFrameIndex;
+    bool willFinish;
     {
         std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
         mode = g_RollbackDebugReplay.mode;
+        hasPerFrameHashes =
+            g_RollbackDebugReplay.frameHashes.size() == static_cast<size_t>(kRollbackDebugReplayFrames);
+        pendingFrameIndex = g_RollbackDebugReplay.verifyFrameIndex + 1;
+        willFinish = pendingFrameIndex >= static_cast<size_t>(kRollbackDebugReplayFrames);
     }
 
     CoreRollbackState finalState;
-    const auto saveBeginTime = std::chrono::steady_clock::now();
-    if (!CoreRollbackSaveGameState(finalState, CoreGetCurrentFrameCount()))
+    long long saveUs = 0;
+    uint64_t finalHash = 0;
+    const bool shouldHashState = hasPerFrameHashes || willFinish;
+    if (shouldHashState)
     {
-        const auto saveUs =
+        const auto saveBeginTime = std::chrono::steady_clock::now();
+        if (!CoreRollbackSaveGameState(finalState, CoreGetCurrentFrameCount()))
+        {
+            saveUs =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - saveBeginTime).count();
+            std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
+            g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
+            WriteRollbackDebugReplayEventLog("verify_frame_save_failed",
+                "save_us=" + std::to_string(saveUs) + " error=" + CoreGetError());
+            return false;
+        }
+        saveUs =
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - saveBeginTime).count();
-        std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
-        g_RollbackDebugReplay.mode = RollbackDebugReplayMode::Idle;
-        WriteRollbackDebugReplayEventLog("verify_frame_save_failed",
-            "save_us=" + std::to_string(saveUs) + " error=" + CoreGetError());
-        return false;
+        finalHash = HashRollbackState(finalState);
     }
-    const auto saveUs =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::steady_clock::now() - saveBeginTime).count();
 
-    const uint64_t finalHash = HashRollbackState(finalState);
     uint64_t expectedHash;
     CoreRollbackState expectedFinalState;
     size_t replayedInputFrames;
@@ -1163,8 +1151,6 @@ bool RollbackDebugVerifyFromRollbackFrame()
     bool shouldStressRollback = false;
     {
         std::lock_guard<std::mutex> lock(g_RollbackDebugReplay.mutex);
-        const bool hasPerFrameHashes =
-            g_RollbackDebugReplay.frameHashes.size() == static_cast<size_t>(kRollbackDebugReplayFrames);
         if (hasPerFrameHashes && g_RollbackDebugReplay.verifyFrameIndex < g_RollbackDebugReplay.frameHashes.size())
         {
             const uint64_t expectedFrameHash = g_RollbackDebugReplay.frameHashes[g_RollbackDebugReplay.verifyFrameIndex];
@@ -1192,7 +1178,8 @@ bool RollbackDebugVerifyFromRollbackFrame()
             !finished &&
             verifyFrameIndex >= static_cast<size_t>(kRollbackDebugStressRollbackFrames) &&
             (verifyFrameIndex % static_cast<size_t>(kRollbackDebugStressInterval)) == 0;
-        matched = finalHash == expectedHash &&
+        matched = finished &&
+            finalHash == expectedHash &&
             recordedInputFrames == replayedInputFrames &&
             g_RollbackDebugReplay.recordedInputHash == g_RollbackDebugReplay.replayedInputHash &&
             g_RollbackDebugReplay.firstInputMismatchFrame < 0;
@@ -1213,7 +1200,7 @@ bool RollbackDebugVerifyFromRollbackFrame()
         WriteRollbackDebugReplayEventLog("verify_frame_progress",
             "frame=" + std::to_string(verifyFrameIndex) +
             " save_us=" + std::to_string(saveUs) +
-            " hash=" + std::to_string(finalHash) +
+            " hash=" + (shouldHashState ? std::to_string(finalHash) : std::string("skipped")) +
             " replayed_inputs=" + std::to_string(replayedInputFrames));
     }
 
