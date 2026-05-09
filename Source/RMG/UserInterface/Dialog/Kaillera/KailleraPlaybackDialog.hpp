@@ -10,7 +10,7 @@
 #ifndef KAILLERAPLAYBACKDIALOG_HPP
 #define KAILLERAPLAYBACKDIALOG_HPP
 
-#ifdef _WIN32
+#ifdef NETPLAY
 
 #include <QDialog>
 #include <QTimer>
@@ -111,5 +111,5 @@ private:
     QProgressDialog* m_exportProgressDialog = nullptr;
 };
 
-#endif // _WIN32
+#endif // NETPLAY
 #endif // KAILLERAPLAYBACKDIALOG_HPP

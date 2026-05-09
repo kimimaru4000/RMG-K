@@ -10,10 +10,12 @@
 #include "KailleraPlaybackDialog.hpp"
 #include "KailleraTableStyle.hpp"
 #include "UserInterface/MainWindow.hpp"
+#ifdef _WIN32
 #include "Utilities/KailleraExport/FfmpegEncoder.hpp"
 #include "Utilities/KailleraExport/KrecParser.hpp"
+#endif
 
-#ifdef _WIN32
+#ifdef NETPLAY
 
 #include <RMG-Core/Archive.hpp>
 #include <RMG-Core/Directories.hpp>
@@ -64,7 +66,7 @@
 static constexpr const char* kManagedFfmpegPackageName = "ffmpeg-8.1-essentials_build";
 static constexpr const char* kManagedFfmpegArchiveName = "ffmpeg-8.1-essentials_build.7z";
 static constexpr const char* kManagedFfmpegUrl =
-    "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1-essentials_build.7z";
+    "https://github.com/GyanD/codexffmpeg/releases/download/8.1/ffmpeg-8.1-essentials_build.7z";
 static constexpr const char* kManagedFfmpegSha256 =
     "9b299a21fc1ca36ac22e4911f8958404c228e4059583c4651743122a8d0a7e56";
 
@@ -360,6 +362,14 @@ static QString findPathFfmpeg()
 
 static bool validateFfmpegPath(const QString& path, QString* errorMessage = nullptr)
 {
+#ifndef _WIN32
+    (void)path;
+    if (errorMessage != nullptr)
+    {
+        *errorMessage = "MP4 export is only supported on Windows.";
+    }
+    return false;
+#else
     std::string error;
     if (KailleraExport::CheckFfmpegExecutable(path.toStdString(), &error))
     {
@@ -371,6 +381,7 @@ static bool validateFfmpegPath(const QString& path, QString* errorMessage = null
         *errorMessage = QString::fromStdString(error);
     }
     return false;
+#endif
 }
 
 static QString formatExportDuration(double totalSeconds)
@@ -558,6 +569,9 @@ void KailleraPlaybackDialog::setupUI()
     m_btnPBRefresh = new QPushButton("Refresh", this);
     m_btnExport = new QPushButton("Export MP4", this);
     m_btnOpenFolder = new QPushButton("Open Folder", this);
+#ifndef _WIN32
+    m_btnExport->hide();
+#endif
 
     m_btnPBRefresh->setText(QString());
     m_btnPBRefresh->setToolTip("Refresh");
@@ -571,7 +585,9 @@ void KailleraPlaybackDialog::setupUI()
     connect(m_btnStop, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackStop);
     connect(m_btnPBDelete, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackDelete);
     connect(m_btnPBRefresh, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackRefresh);
+#ifdef _WIN32
     connect(m_btnExport, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackExport);
+#endif
     connect(m_btnOpenFolder, &QPushButton::clicked, this, &KailleraPlaybackDialog::onPlaybackOpenFolder);
 
     if (modern)
@@ -582,7 +598,9 @@ void KailleraPlaybackDialog::setupUI()
         configurePlaybackButton(m_btnStop, "KailleraSecondaryButton");
         configurePlaybackButton(m_btnPBDelete, "KailleraSecondaryButton");
         configurePlaybackButton(m_btnPBRefresh, "KailleraHeaderIconButton");
+#ifdef _WIN32
         configurePlaybackButton(m_btnExport, "KailleraPrimaryButton");
+#endif
         configurePlaybackButton(m_btnOpenFolder, "KailleraSecondaryButton");
     }
 
@@ -608,7 +626,9 @@ void KailleraPlaybackDialog::setupUI()
         bottomLayout->setSpacing(8);
     }
     bottomLayout->addWidget(m_btnPBDelete);
+#ifdef _WIN32
     bottomLayout->addWidget(m_btnExport);
+#endif
     bottomLayout->addStretch();
     bottomLayout->addWidget(m_btnPBRefresh);
     bottomLayout->addWidget(m_btnOpenFolder);
@@ -970,6 +990,9 @@ QString KailleraPlaybackDialog::getSelectedRecordingGameName(QString* recordingP
         return {};
     }
 
+#ifndef _WIN32
+    return {};
+#else
     KailleraExport::KrecData krecData;
     std::string errorMessage;
     if (!KailleraExport::ParseKrecFile(std::filesystem::path(selectedPath.toStdString()), krecData, &errorMessage))
@@ -983,6 +1006,7 @@ QString KailleraPlaybackDialog::getSelectedRecordingGameName(QString* recordingP
     }
 
     return QString::fromStdString(krecData.header.gameName);
+#endif
 }
 
 bool KailleraPlaybackDialog::promptForExportSettings(const QString& defaultOutputPath,
@@ -2028,4 +2052,4 @@ void KailleraPlaybackDialog::onPlaybackDoubleClicked(int row, int column)
     }
 }
 
-#endif // _WIN32
+#endif // NETPLAY

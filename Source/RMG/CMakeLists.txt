@@ -39,6 +39,14 @@ if (WIN32 AND NETPLAY)
     find_package(OpenGL REQUIRED)
 endif()
 
+# hidapi for raphnet adapter input test dialog
+find_package(PkgConfig REQUIRED)
+if (WIN32)
+    pkg_check_modules(HIDAPI REQUIRED hidapi)
+else()
+    pkg_check_modules(HIDAPI REQUIRED hidapi-hidraw)
+endif()
+
 set(RMG_SOURCES
     UserInterface/MainWindow.cpp
     UserInterface/MainWindow.ui
@@ -66,6 +74,7 @@ set(RMG_SOURCES
     UserInterface/Dialog/RomInfoDialog.ui
     UserInterface/Dialog/AboutDialog.cpp
     UserInterface/Dialog/AboutDialog.ui
+    UserInterface/Dialog/RaphnetInputDialog.cpp
     UserInterface/Dialog/LogDialog.cpp
     UserInterface/Dialog/LogDialog.ui
     UserInterface/NoFocusDelegate.cpp
@@ -156,14 +165,15 @@ if (PORTABLE_INSTALL)
     )
 endif(PORTABLE_INSTALL)
 
-target_include_directories(RMG PRIVATE 
+target_include_directories(RMG PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../
     ${IMGUI_DIR}
+    ${HIDAPI_INCLUDE_DIRS}
 )
 
-target_link_libraries(RMG Qt6::Gui Qt6::Widgets)
+target_link_libraries(RMG Qt6::Gui Qt6::Widgets ${HIDAPI_LIBRARIES})
 
 if (NOT WIN32)
     target_link_libraries(RMG Qt6::DBus)
