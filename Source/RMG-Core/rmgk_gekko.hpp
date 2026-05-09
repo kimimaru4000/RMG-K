@@ -33,6 +33,7 @@ class rmgk_gekko
     static bool synchronize_input(void* values, int size, int players);
     static void set_debug_hooks(InputProvider inputProvider, FrameCallback beginFrame, FrameCallback endFrame, void* userData);
     static void set_debug_frame_output(int flags);
+    static bool debug_run_frame_with_inputs(const uint32_t* inputs, int players, int flags);
     static bool toggle_client_input_replay();
 };
 

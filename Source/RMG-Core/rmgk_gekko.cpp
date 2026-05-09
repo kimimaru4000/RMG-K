@@ -87,6 +87,7 @@ size_t g_GekkoClientReplayIndex = 0;
 long long g_GekkoLastLoadStateUs = 0;
 long long g_GekkoLastSaveStateUs = 0;
 long long g_GekkoLastRunFrameUs = 0;
+long long g_GekkoLastPendingSaveUs = 0;
 rmgk_gekko::InputProvider g_GekkoDebugInputProvider = nullptr;
 rmgk_gekko::FrameCallback g_GekkoDebugBeginFrame = nullptr;
 rmgk_gekko::FrameCallback g_GekkoDebugEndFrame = nullptr;
@@ -124,6 +125,7 @@ void reset_gekko_log()
         g_GekkoLastLoadStateUs = 0;
         g_GekkoLastSaveStateUs = 0;
         g_GekkoLastRunFrameUs = 0;
+        g_GekkoLastPendingSaveUs = 0;
         return;
     }
 
@@ -141,6 +143,7 @@ void reset_gekko_log()
     g_GekkoLastLoadStateUs = 0;
     g_GekkoLastSaveStateUs = 0;
     g_GekkoLastRunFrameUs = 0;
+    g_GekkoLastPendingSaveUs = 0;
 }
 
 void write_gekko_log(const std::string& message)
@@ -263,7 +266,12 @@ bool save_gekko_state(const PendingGekkoSave& save)
 
     if (!CoreRollbackSaveGameStateInto(state, save.state, static_cast<int>(kGekkoStateCapacity), coreFrame))
     {
-        write_gekko_log("save_state result=fail");
+        g_GekkoLastSaveStateUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - beginTime).count();
+        std::ostringstream stream;
+        stream << "save_state result=fail elapsed_us=" << g_GekkoLastSaveStateUs;
+        write_gekko_log(stream.str());
         return false;
     }
 
@@ -318,7 +326,12 @@ bool load_gekko_state(const GekkoGameEvent* event)
     state.frame = event->data.load.frame;
     if (!CoreRollbackLoadGameState(state))
     {
-        write_gekko_log("load_state result=fail");
+        g_GekkoLastLoadStateUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - beginTime).count();
+        std::ostringstream stream;
+        stream << "load_state result=fail elapsed_us=" << g_GekkoLastLoadStateUs;
+        write_gekko_log(stream.str());
         return false;
     }
     g_GekkoLastLoadStateUs =
@@ -478,6 +491,8 @@ bool latch_gekko_input(const GekkoGameEvent* event)
 
 bool process_pending_saves()
 {
+    const auto beginTime = std::chrono::steady_clock::now();
+    const size_t pendingCount = g_GekkoPendingSaves.size();
     for (const auto& save : g_GekkoPendingSaves)
     {
         if (!save_gekko_state(save))
@@ -487,6 +502,17 @@ bool process_pending_saves()
         }
     }
     g_GekkoPendingSaves.clear();
+    g_GekkoLastPendingSaveUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - beginTime).count();
+    if (g_GekkoLogEnabled && pendingCount > 0)
+    {
+        std::ostringstream stream;
+        stream << "pending_saves result=ok count=" << pendingCount
+               << " elapsed_us=" << g_GekkoLastPendingSaveUs
+               << " last_save_us=" << g_GekkoLastSaveStateUs;
+        write_gekko_log(stream.str());
+    }
     return true;
 }
 
@@ -538,6 +564,16 @@ int rollback_execute_begin_frame(void* userData)
     int summaryRollbackAdvanceCount = 0;
     int summaryRunaheadAdvanceCount = 0;
     int summaryWaitLoops = 0;
+    long long summaryNetworkPollUs = 0;
+    long long summaryPacingUs = 0;
+    long long summarySubmitInputUs = 0;
+    long long summaryUpdateSessionUs = 0;
+    long long summaryLatchInputUs = 0;
+    long long summarySaveUs = 0;
+    long long summaryLoadUs = 0;
+    long long summaryResimUs = 0;
+    long long summaryMaxResimUs = 0;
+    long long summaryDebugBeginUs = 0;
 
     if (g_GekkoSession == nullptr)
     {
@@ -548,22 +584,42 @@ int rollback_execute_begin_frame(void* userData)
         write_gekko_log("begin_frame result=stop_requested");
         return 0;
     }
-    if (g_GekkoDebugBeginFrame != nullptr && !g_GekkoDebugBeginFrame(g_GekkoDebugUserData))
+    if (g_GekkoDebugBeginFrame != nullptr)
     {
-        write_gekko_log("begin_frame result=fail reason=debug_hook");
-        return 0;
+        const auto debugBeginTime = std::chrono::steady_clock::now();
+        if (!g_GekkoDebugBeginFrame(g_GekkoDebugUserData))
+        {
+            write_gekko_log("begin_frame result=fail reason=debug_hook");
+            return 0;
+        }
+        summaryDebugBeginUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - debugBeginTime).count();
     }
 
     g_GekkoHasLatchedInput = false;
     g_GekkoPendingSaves.clear();
 
+    const auto networkPollTime = std::chrono::steady_clock::now();
     gekko_network_poll(g_GekkoSession);
-    apply_gekko_frame_pacing();
+    summaryNetworkPollUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - networkPollTime).count();
 
+    const auto pacingTime = std::chrono::steady_clock::now();
+    apply_gekko_frame_pacing();
+    summaryPacingUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - pacingTime).count();
+
+    const auto submitInputTime = std::chrono::steady_clock::now();
     if (!submit_local_input())
     {
         return 0;
     }
+    summarySubmitInputUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - submitInputTime).count();
 
     for (;;)
     {
@@ -574,7 +630,11 @@ int rollback_execute_begin_frame(void* userData)
         }
 
         int count = 0;
+        const auto updateSessionTime = std::chrono::steady_clock::now();
         GekkoGameEvent** events = gekko_update_session(g_GekkoSession, &count);
+        summaryUpdateSessionUs +=
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - updateSessionTime).count();
         log_session_events();
 
         if (count == 0)
@@ -655,6 +715,10 @@ int rollback_execute_begin_frame(void* userData)
                 {
                     return 0;
                 }
+                else
+                {
+                    summarySaveUs += g_GekkoLastSaveStateUs;
+                }
                 break;
             }
             case GekkoLoadEvent:
@@ -664,13 +728,19 @@ int rollback_execute_begin_frame(void* userData)
                 {
                     return 0;
                 }
+                summaryLoadUs += g_GekkoLastLoadStateUs;
                 break;
             case GekkoAdvanceEvent:
                 write_gekko_log("advance_frame begin");
+            {
+                const auto latchInputTime = std::chrono::steady_clock::now();
                 if (!latch_gekko_input(event))
                 {
                     return 0;
                 }
+                summaryLatchInputUs +=
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - latchInputTime).count();
 
                 if (event->data.adv.rolling_back || event->data.adv.running_ahead)
                 {
@@ -691,6 +761,8 @@ int rollback_execute_begin_frame(void* userData)
                     g_GekkoLastRunFrameUs =
                         std::chrono::duration_cast<std::chrono::microseconds>(
                             std::chrono::steady_clock::now() - runFrameBeginTime).count();
+                    summaryResimUs += g_GekkoLastRunFrameUs;
+                    summaryMaxResimUs = std::max(summaryMaxResimUs, g_GekkoLastRunFrameUs);
                     if (g_GekkoLogEnabled)
                     {
                         CoreRollbackRunFrameStats runFrameStats;
@@ -753,6 +825,7 @@ int rollback_execute_begin_frame(void* userData)
                     deferSavesUntilFrameEnd = true;
                 }
                 break;
+            }
             default:
                 break;
             }
@@ -784,9 +857,20 @@ int rollback_execute_begin_frame(void* userData)
                            << " rollback_advances=" << summaryRollbackAdvanceCount
                            << " runahead_advances=" << summaryRunaheadAdvanceCount
                            << " wait_loops=" << summaryWaitLoops
+                           << " debug_begin_us=" << summaryDebugBeginUs
+                           << " network_poll_us=" << summaryNetworkPollUs
+                           << " pacing_us=" << summaryPacingUs
+                           << " submit_input_us=" << summarySubmitInputUs
+                           << " update_session_us=" << summaryUpdateSessionUs
+                           << " latch_input_us=" << summaryLatchInputUs
+                           << " save_total_us=" << summarySaveUs
+                           << " load_total_us=" << summaryLoadUs
+                           << " resim_total_us=" << summaryResimUs
+                           << " resim_max_us=" << summaryMaxResimUs
                            << " last_load_us=" << g_GekkoLastLoadStateUs
                            << " last_save_us=" << g_GekkoLastSaveStateUs
                            << " last_run_frame_us=" << g_GekkoLastRunFrameUs
+                           << " pending_save_us=" << g_GekkoLastPendingSaveUs
                            << " frames_ahead=" << std::fixed << std::setprecision(2)
                            << gekko_frames_ahead(g_GekkoSession);
                     write_gekko_log(stream.str());
@@ -803,19 +887,46 @@ int rollback_execute_begin_frame(void* userData)
 int rollback_execute_end_frame(void* userData)
 {
     (void)userData;
+    const auto beginTime = std::chrono::steady_clock::now();
     write_gekko_log("end_frame begin");
+    const auto pendingSaveBeginTime = std::chrono::steady_clock::now();
     if (!process_pending_saves())
     {
         write_gekko_log("end_frame result=fail reason=save");
         return 0;
     }
-    if (g_GekkoDebugEndFrame != nullptr && !g_GekkoDebugEndFrame(g_GekkoDebugUserData))
+    const auto pendingSaveUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - pendingSaveBeginTime).count();
+    long long debugEndUs = 0;
+    if (g_GekkoDebugEndFrame != nullptr)
     {
-        write_gekko_log("end_frame result=fail reason=debug_hook");
-        return 0;
+        const auto debugEndBeginTime = std::chrono::steady_clock::now();
+        if (!g_GekkoDebugEndFrame(g_GekkoDebugUserData))
+        {
+            write_gekko_log("end_frame result=fail reason=debug_hook");
+            return 0;
+        }
+        debugEndUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - debugEndBeginTime).count();
     }
     g_GekkoHasLatchedInput = false;
-    write_gekko_log("end_frame result=ok");
+    if (g_GekkoLogEnabled)
+    {
+        const auto totalUs =
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - beginTime).count();
+        std::ostringstream stream;
+        stream << "end_frame result=ok total_us=" << totalUs
+               << " pending_save_us=" << pendingSaveUs
+               << " debug_end_us=" << debugEndUs;
+        write_gekko_log(stream.str());
+    }
+    else
+    {
+        write_gekko_log("end_frame result=ok");
+    }
     return 1;
 }
 #endif
@@ -1190,6 +1301,89 @@ CORE_EXPORT void rmgk_gekko::set_debug_frame_output(int flags)
     g_GekkoDebugFrameOutput = flags;
 #else
     (void)flags;
+#endif
+}
+
+CORE_EXPORT bool rmgk_gekko::debug_run_frame_with_inputs(const uint32_t* inputs, int players, int flags)
+{
+#ifdef RMGK_HAVE_GEKKONET
+    if (inputs == nullptr || g_GekkoSession == nullptr || players < g_GekkoPlayers ||
+        g_GekkoInputSize != static_cast<int>(sizeof(uint32_t)))
+    {
+        write_gekko_log("debug_run_frame_with_inputs result=fail reason=shape");
+        return false;
+    }
+
+    const int expectedBytes = g_GekkoPlayers * g_GekkoInputSize;
+    if (static_cast<int>(g_GekkoLatchedInput.size()) != expectedBytes)
+    {
+        g_GekkoLatchedInput.resize(static_cast<size_t>(expectedBytes));
+    }
+
+    std::memset(g_GekkoLatchedInput.data(), 0, static_cast<size_t>(expectedBytes));
+    for (int player = 0; player < g_GekkoPlayers; player++)
+    {
+        std::memcpy(g_GekkoLatchedInput.data() + (player * g_GekkoInputSize),
+            &inputs[player], sizeof(uint32_t));
+    }
+    g_GekkoHasLatchedInput = true;
+
+    const auto runFrameBeginTime = std::chrono::steady_clock::now();
+    const bool result = CoreRollbackRunFrame(flags);
+    g_GekkoLastRunFrameUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - runFrameBeginTime).count();
+    g_GekkoHasLatchedInput = false;
+
+    if (g_GekkoLogEnabled)
+    {
+        CoreRollbackRunFrameStats runFrameStats;
+        const bool hasRunFrameStats = CoreRollbackGetRunFrameStats(runFrameStats);
+        std::ostringstream stream;
+        stream << "debug_run_frame_with_inputs result=" << (result ? "ok" : "fail")
+               << " elapsed_us=" << g_GekkoLastRunFrameUs
+               << " flags=" << flags;
+        if (hasRunFrameStats)
+        {
+            stream << " core_total_us=" << runFrameStats.totalUs
+                   << " r4300_us=" << runFrameStats.r4300Us
+                   << " vi_us=" << runFrameStats.viUs
+                   << " new_frame_us=" << runFrameStats.newFrameUs
+                   << " cheats_us=" << runFrameStats.cheatsUs
+                   << " pacing_us=" << runFrameStats.pacingUs
+                   << " input_us=" << runFrameStats.inputUs
+                   << " pause_us=" << runFrameStats.pauseUs
+                   << " netplay_us=" << runFrameStats.netplayUs
+                   << " dynarec_recompiles=" << runFrameStats.dynarecRecompileCount
+                   << " dynarec_recompile_us=" << runFrameStats.dynarecRecompileUs
+                   << " dynarec_invalidate_us=" << runFrameStats.dynarecInvalidateUs
+                   << " dynarec_full_invalidates=" << runFrameStats.dynarecFullInvalidateCount
+                   << " dynarec_range_invalidates=" << runFrameStats.dynarecRangeInvalidateCount
+                   << " dynarec_block_invalidates=" << runFrameStats.dynarecBlockInvalidateCount
+                   << " cached_code_full_invalidates=" << runFrameStats.cachedCodeFullInvalidateCount
+                   << " cached_code_range_invalidates=" << runFrameStats.cachedCodeRangeInvalidateCount
+                   << " emumode=" << runFrameStats.emumode
+                   << " cp0_count_before=" << runFrameStats.cp0CountBefore
+                   << " cp0_count_after=" << runFrameStats.cp0CountAfter
+                   << " cp0_count_delta=" << (runFrameStats.cp0CountAfter - runFrameStats.cp0CountBefore)
+                   << " pc_before=0x" << std::hex << runFrameStats.pcBefore
+                   << " pc_after=0x" << runFrameStats.pcAfter << std::dec
+                   << " current_frame_before=" << runFrameStats.currentFrameBefore
+                   << " current_frame_after=" << runFrameStats.currentFrameAfter
+                   << " output_flags=" << runFrameStats.outputFlags;
+        }
+        for (int player = 0; player < g_GekkoPlayers; player++)
+        {
+            stream << " p" << (player + 1) << "=" << hex_input(inputs[player]);
+        }
+        write_gekko_log(stream.str());
+    }
+    return result;
+#else
+    (void)inputs;
+    (void)players;
+    (void)flags;
+    return false;
 #endif
 }
 
