@@ -143,6 +143,10 @@ static void FrameCallback(unsigned int frameIndex)
 static void KailleraPifSyncCallback(struct pif* pif)
 {
 #ifdef NETPLAY
+    if (rmgk_gekko::is_netplay_session_active()) {
+        return;
+    }
+
     if (!CoreHasInitKaillera()) {
         return;
     }
@@ -645,7 +649,7 @@ CORE_EXPORT bool CoreStartEmulation(std::filesystem::path n64rom, std::filesyste
 #endif
             if (set_callback)
             {
-                set_callback(KailleraPifSyncCallback);
+                set_callback(address == "KAILLERA" ? KailleraPifSyncCallback : nullptr);
             }
         }
 #endif
