@@ -1293,7 +1293,7 @@ bool RollbackDebugRunStressRollbackFromRollbackFrame(size_t frame)
         const auto resimBeginTime = std::chrono::steady_clock::now();
         const bool resimOk = rmgk_gekko::debug_run_frame_with_inputs(
             resimInputs[static_cast<size_t>(i)].data(), kRollbackDebugReplayPlayers, CoreFrameOutput_None);
-        const auto resimUs =
+        const long long resimUs =
             std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - resimBeginTime).count();
         CoreRollbackRunFrameStats runFrameStats;

@@ -16,7 +16,7 @@
 
 #ifdef RMGK_HAVE_GEKKONET
 #include <gekkonet.h>
-#ifdef _WIN32
+#ifdef RMGK_HAVE_P2P_TRANSPORT
 #include "core/p2p_core.h"
 #endif
 #endif
@@ -89,7 +89,7 @@ std::mutex g_GekkoClientReplayMutex;
 ClientInputReplayMode g_GekkoClientReplayMode = ClientInputReplayMode::Off;
 std::vector<uint32_t> g_GekkoClientReplayInputs;
 size_t g_GekkoClientReplayIndex = 0;
-#ifdef _WIN32
+#ifdef RMGK_HAVE_P2P_TRANSPORT
 std::vector<GekkoNetResult*> g_GekkoP2PAdapterResults;
 std::string g_GekkoP2PRemoteAddress;
 #endif
@@ -168,7 +168,7 @@ void write_gekko_log(const std::string& message)
     file << "core_frame=" << CoreGetCurrentFrameCount() << " " << message << "\n";
 }
 
-#ifdef _WIN32
+#ifdef RMGK_HAVE_P2P_TRANSPORT
 void p2p_adapter_send(GekkoNetAddress* addr, const char* data, int length)
 {
     (void)addr;
@@ -1119,9 +1119,14 @@ CORE_EXPORT bool rmgk_gekko::start_p2p_session(const char* gameName, int players
     config.desync_detection = true;
     config.check_distance = 10;
     gekko_start(g_GekkoSession, &config);
-#ifdef _WIN32
+#ifdef RMGK_HAVE_P2P_TRANSPORT
     p2p_rollback_transport_clear();
     gekko_net_adapter_set(g_GekkoSession, &g_GekkoP2PAdapter);
+#else
+#ifdef _WIN32
+    CoreSetError("GekkoNet P2P transport is unavailable in this build");
+    close_session();
+    return false;
 #else
     try
     {
@@ -1137,6 +1142,7 @@ CORE_EXPORT bool rmgk_gekko::start_p2p_session(const char* gameName, int players
         close_session();
         return false;
     }
+#endif
 #endif
     gekko_set_runahead(g_GekkoSession, 0);
 
@@ -1171,7 +1177,7 @@ CORE_EXPORT bool rmgk_gekko::start_p2p_session(const char* gameName, int players
     }
 
     std::string remoteAddress = std::string(remoteIp) + ":" + std::to_string(remotePort);
-#ifdef _WIN32
+#ifdef RMGK_HAVE_P2P_TRANSPORT
     remoteAddress = "p2p-peer";
     g_GekkoP2PRemoteAddress = remoteAddress;
 #endif
@@ -1372,7 +1378,7 @@ CORE_EXPORT void rmgk_gekko::close_session()
     }
     g_GekkoSpeedScale = 1.0;
     CoreRollbackSetTimesyncScale(1.0);
-#ifdef _WIN32
+#ifdef RMGK_HAVE_P2P_TRANSPORT
     g_GekkoP2PRemoteAddress.clear();
 #endif
 #endif
