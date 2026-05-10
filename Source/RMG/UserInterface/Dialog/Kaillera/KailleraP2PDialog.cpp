@@ -490,7 +490,7 @@ void KailleraP2PDialog::setupUI()
 {
     setObjectName("KailleraP2PDialog");
     setWindowTitle(m_isHost ? "Hosting P2P" : "P2P Game");
-    setMinimumSize(610, 420);
+    setMinimumSize(610, 465);
     resize(minimumSize());
 
     const QString theme = QString::fromStdString(CoreSettingsGetStringValue(SettingsID::GUI_Theme));
@@ -918,8 +918,8 @@ void KailleraP2PDialog::applyGameLayerUI()
     if (m_gameLayerStatusLabel != nullptr)
     {
         m_gameLayerStatusLabel->setText(rollback ?
-            "Game layer: Rollback" :
-            "Game layer: Standard Kaillera");
+            "Netcode: Rollback" :
+            "Netcode: Delay-based");
     }
 
     if (m_frameDelayCombo != nullptr)
