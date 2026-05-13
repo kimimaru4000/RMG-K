@@ -10,6 +10,7 @@
 #include "UserInterface/Dialog/Netplay/NetplayCommon.hpp"
 #include "UserInterface/Widget/KeybindButton.hpp"
 #include "Utilities/QtMessageBox.hpp"
+#include "Utilities/UpdaterEnvCheck.hpp"
 #include "OnScreenDisplay.hpp"
 #include "SettingsDialog.hpp"
 
@@ -295,6 +296,11 @@ SettingsDialog::SettingsDialog(QWidget *parent, QString file) : QDialog(parent)
 
 #ifndef UPDATER
     this->checkForUpdatesCheckBox->setHidden(true);
+#else
+    if (!UpdaterEnvCheck::ShouldAllowUpdater())
+    {
+        this->checkForUpdatesCheckBox->setHidden(true);
+    }
 #endif // !UPDATER
 
 #ifndef NETPLAY
@@ -837,7 +843,10 @@ void SettingsDialog::loadInterfaceGeneralSettings(void)
     this->iconThemeComboBox->setCurrentText(QString::fromStdString(CoreSettingsGetStringValue(SettingsID::GUI_IconTheme)));
     this->autoStartNetplayOnStartupCheckBox->setChecked(CoreSettingsGetBoolValue(SettingsID::GUI_AutoStartNetplayOnStartup));
 #ifdef UPDATER
-    this->checkForUpdatesCheckBox->setChecked(CoreSettingsGetBoolValue(SettingsID::GUI_CheckForUpdates));
+    if (UpdaterEnvCheck::ShouldAllowUpdater())
+    {
+        this->checkForUpdatesCheckBox->setChecked(CoreSettingsGetBoolValue(SettingsID::GUI_CheckForUpdates));
+    }
 #endif // UPDATER
 }
 
@@ -1091,7 +1100,10 @@ void SettingsDialog::loadDefaultInterfaceGeneralSettings(void)
     this->iconThemeComboBox->setCurrentText(QString::fromStdString(CoreSettingsGetDefaultStringValue(SettingsID::GUI_IconTheme)));
     this->autoStartNetplayOnStartupCheckBox->setChecked(CoreSettingsGetDefaultBoolValue(SettingsID::GUI_AutoStartNetplayOnStartup));
 #ifdef UPDATER
-    this->checkForUpdatesCheckBox->setChecked(CoreSettingsGetDefaultBoolValue(SettingsID::GUI_CheckForUpdates));
+    if (UpdaterEnvCheck::ShouldAllowUpdater())
+    {
+        this->checkForUpdatesCheckBox->setChecked(CoreSettingsGetDefaultBoolValue(SettingsID::GUI_CheckForUpdates));
+    }
 #endif // UPDATER
 }
 
