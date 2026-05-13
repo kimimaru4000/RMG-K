@@ -16,5 +16,5 @@ using namespace Utilities;
 
 bool UpdaterEnvCheck::ShouldAllowUpdater()
 {
-    bool allowed = qEnvironmentVariableIntegerValue(EnvVars::RMGDisableUpdater) != 1;
+    return qEnvironmentVariableIntegerValue(EnvVars::RMGDisableUpdater) != 1;
 }
