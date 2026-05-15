@@ -8,13 +8,11 @@
  *  along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 #include "UpdaterEnvCheck.hpp"
-#include "EnvVars.hpp"
-
-#include <QtEnvironmentVariables>
+#include <cstdlib>
 
 using namespace Utilities;
 
 bool UpdaterEnvCheck::ShouldAllowUpdater()
 {
-    return qEnvironmentVariableIntegerValue(EnvVars::RMGDisableUpdater) != 1;
+    return std::getenv("RMG_DISABLE_UPDATER") != "1";
 }
