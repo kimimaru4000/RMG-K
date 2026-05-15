@@ -4725,10 +4725,7 @@ void MainWindow::on_Action_Help_About(void)
 void MainWindow::on_Action_Help_Update(void)
 {
 #ifdef UPDATER
-    if (UpdaterEnvCheck::ShouldAllowUpdater())
-    {
-        this->checkForUpdates(false, true);
-    }
+    this->checkForUpdates(false, true);
 #endif // UPDATER
 }
 

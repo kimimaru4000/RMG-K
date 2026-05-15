@@ -9,10 +9,13 @@
  */
 #include "UpdaterEnvCheck.hpp"
 #include <cstdlib>
+#include <string>
 
 using namespace Utilities;
 
 bool UpdaterEnvCheck::ShouldAllowUpdater()
 {
-    return std::getenv("RMG_DISABLE_UPDATER") != "1";
+    auto val = std::getenv("RMG_DISABLE_UPDATER");
+    
+    return val == nullptr || std::string(val) != "1";
 }
